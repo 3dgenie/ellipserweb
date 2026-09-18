@@ -1,0 +1,214 @@
+<!doctype html>
+<!-- ELlipserWeb | Copyright (c) 2026 ai2-3D. All rights reserved. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="author" content="ai2-3D">
+<meta name="copyright" content="Copyright (c) 2026 ai2-3D. All rights reserved.">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="ELlipserWeb — local browser-based photographic measurement and trajectory documentation.">
+<title>ELlipserWeb</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b2238'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='12' fill='none' stroke='%23f09a35' stroke-width='4' transform='rotate(-24 32 32)'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%23f09a35'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app-shell">
+<header class="topbar">
+<div class="brand" aria-label="ELlipserWeb">
+<span class="brand-mark" aria-hidden="true"></span>
+<span>ELlipser<span>Web</span></span>
+</div>
+<div class="top-actions">
+<button id="newProjectBtn" class="button ghost">New</button>
+<button id="openProjectBtn" class="button ghost">Open .elp</button>
+<button id="loadImagesBtn" class="button ghost">Load Images</button>
+<button id="saveProjectBtn" class="button ghost">Save .elp</button>
+<button id="exportImageBtn" class="button ghost" disabled>Export Image</button>
+<button id="exportCsvBtn" class="button ghost" disabled>Export CSV</button>
+<button id="settingsBtn" class="button ghost icon-only" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 13a8 8 0 0 0 .06-1 8 8 0 0 0-.06-1l2.11-1.65-2-3.46-2.49.8a8 8 0 0 0-1.73-1L12.7 2h-1.4L10.7 4.69a8 8 0 0 0-1.73 1l-2.49-.8-2 3.46L6.6 11a8 8 0 0 0 0 2l-2.11 1.65 2 3.46 2.49-.8a8 8 0 0 0 1.73 1L11.3 22h1.4l.6-2.69a8 8 0 0 0 1.73-1l2.49.8 2-3.46Z"></path></svg></button>
+</div>
+</header>
+<main class="workspace">
+<nav class="tool-rail" aria-label="Measurement tools">
+<button class="tool" data-tool="scale" title="Scale (S)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17L17 4M7 19l-2-2m6-2-2-2m6-2-2-2m6-2-2-2"></path></svg>Scale</button>
+<div class="tool-group">
+<button class="tool" id="pointTool" data-tool="point" title="Point (P)"><svg class="tool-svg tool-icon" viewBox="0 0 32 24" aria-hidden="true"><path d="M16 5v14M9 12h14"></path></svg><span class="tool-name">Point</span></button>
+<button type="button" class="tool-variant" aria-controls="pointFlyout" aria-label="Point styles" aria-haspopup="menu" aria-expanded="false"></button>
+</div>
+<button class="tool" data-tool="distance" title="Distance (D)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16.5L17 7.5"></path><circle cx="7" cy="16.5" r="1.7" style="fill: currentColor; stroke: none"></circle><circle cx="17" cy="7.5" r="1.7" style="fill: currentColor; stroke: none"></circle></svg>Distance</button>
+<button class="tool" data-tool="angle" title="Angle (A)"><span>∠</span>Angle</button>
+<button class="tool" data-tool="circle" title="Circle (C)"><span>○</span>Circle</button>
+<div class="tool-group">
+<button class="tool" id="ellipseTool" data-tool="ellipse" title="Ellipse (E)"><svg class="tool-svg tool-icon" viewBox="0 0 32 24" aria-hidden="true"><ellipse cx="16" cy="12" rx="12.5" ry="7.5"></ellipse></svg><span class="tool-name">Ellipse</span></button>
+<button type="button" class="tool-variant" aria-controls="ellipseFlyout" aria-label="Ellipse options" aria-haspopup="menu" aria-expanded="false"></button>
+</div>
+<button class="tool" data-tool="polyline" title="Polyline (L)"><svg class="tool-svg" viewBox="0 0 32 24" aria-hidden="true"><polyline points="3,20 11,7 20,16 29,4"></polyline></svg>Polyline</button>
+<button class="tool" data-tool="polygon" title="Polygon (G)"><span>⬠</span>Polygon</button>
+<button class="tool" data-tool="text" title="Text (T)"><span>T</span>Text</button>
+</nav>
+<aside class="object-sidebar">
+<button id="toggleLeftPanel" class="panel-collapse panel-collapse-left" aria-label="Collapse Structure and Properties" aria-expanded="true">‹</button>
+<section class="panel structure-panel">
+<div class="panel-heading">
+<h2>Structure</h2>
+</div>
+<div id="structureEmpty" class="empty-small">Load an image to begin.</div>
+<div id="structureList" class="structure-list" role="listbox" aria-label="Objects"></div>
+</section>
+<section class="panel properties-panel">
+<div class="panel-heading"><h2>Properties</h2></div>
+<div id="propertiesEmpty" class="empty-small">Select an object to view its properties.</div>
+<form id="propertiesForm" class="properties-form" hidden></form>
+</section>
+</aside>
+<section class="center-stage">
+<div id="canvasWrap" class="canvas-wrap">
+<canvas id="measurementCanvas" aria-label="Image measurement workspace"></canvas>
+<div id="emptyState" class="empty-state">
+<h1>Start a new project to begin</h1>
+<p>Images and measurements remain on your local device.</p>
+<button id="newProjectPrimary" class="button primary">New Project</button>
+</div>
+<div id="drawingHint" class="drawing-hint" hidden></div>
+<button id="fitCanvasBtn" class="canvas-fit" title="Fit image to view" aria-label="Fit image to view" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+</div>
+<div class="filmstrip-bar">
+<div id="filmstrip" class="filmstrip" aria-label="Project images"></div>
+</div>
+<button id="toggleFilmstrip" class="panel-collapse panel-collapse-bottom" aria-label="Collapse thumbnails" aria-expanded="true"><span>‹</span></button>
+</section>
+<aside class="details-sidebar">
+<button id="toggleRightPanel" class="panel-collapse panel-collapse-right" aria-label="Collapse Project panel" aria-expanded="true">›</button>
+<section class="panel project-panel">
+<div class="panel-heading"><h2>Project</h2></div>
+<label>Project name<input id="projectName" value="Untitled Project"></label>
+<label>Case / Reference<input id="caseNumber" placeholder="Optional"></label>
+<label>Notes<textarea id="projectNotes" rows="2" placeholder="Optional"></textarea></label>
+</section>
+<section class="panel calibration-panel">
+<div class="panel-heading"><h2>Calibration</h2></div>
+<div id="calibrationEmpty" class="empty-small">Create a scale measurement on the active image.</div>
+<div id="calibrationValues" hidden>
+<div class="data-row"><span>Known length</span><strong id="knownLengthValue">—</strong></div>
+<div class="data-row"><span>Pixel length</span><strong id="pixelLengthValue">—</strong></div>
+<div class="data-row"><span>Scale factor</span><strong id="scaleFactorValue">—</strong></div>
+</div>
+</section>
+<section class="panel measurements-panel">
+<div class="panel-heading"><h2>Measurements</h2><span id="measurementCount" class="count">0</span></div>
+<div id="measurementEmpty" class="empty-small">No measurements on this image.</div>
+<div id="measurementList" class="measurement-list"></div>
+</section>
+</aside>
+</main>
+<footer class="statusbar">
+<div><strong>LMB</strong> Select object / draw <span class="divider">|</span> <strong>Wheel</strong> Zoom <span class="divider">|</span> <strong>RMB</strong> Pan / finish polyline or polygon <span class="divider">|</span> <strong>Delete</strong> Remove selected</div>
+<div class="local-status"><span></span> Local processing only</div>
+</footer>
+</div>
+<div id="ellipseFlyout" class="tool-flyout" role="menu" hidden>
+<button type="button" role="menuitem" data-variant="ellipse">
+<svg viewBox="0 0 32 24" aria-hidden="true"><ellipse cx="16" cy="12" rx="12.5" ry="7.5"></ellipse></svg>
+<span>Full Ellipse</span>
+</button>
+<button type="button" role="menuitem" data-variant="halfEllipse">
+<svg viewBox="0 0 32 24" aria-hidden="true"><path d="M16 4.5A12.5 7.5 0 0 1 16 19.5Z"></path></svg>
+<span>Half Ellipse</span>
+</button>
+</div>
+<div id="pointFlyout" class="tool-flyout" role="menu" hidden>
+<button type="button" role="menuitem" data-point-style="cross">
+<svg viewBox="0 0 32 24" aria-hidden="true"><path d="M16 5v14M9 12h14"></path></svg>
+<span>Cross</span>
+</button>
+<button type="button" role="menuitem" data-point-style="dot">
+<svg viewBox="0 0 32 24" aria-hidden="true"><circle cx="16" cy="12" r="4.5" style="fill: currentColor; stroke: none"></circle></svg>
+<span>Dot</span>
+</button>
+<button type="button" role="menuitem" data-point-style="crosshair">
+<svg viewBox="0 0 32 24" aria-hidden="true"><circle cx="16" cy="12" r="5"></circle><path d="M16 4v16M8 12h16"></path></svg>
+<span>Crosshair</span>
+</button>
+</div>
+<dialog id="settingsDialog" class="project-dialog settings-dialog">
+<form id="settingsForm" class="dialog-form" method="dialog">
+<div class="dialog-heading">
+<div>
+<h2>Settings</h2>
+<p>Defaults apply to new objects. Existing measurements keep the color and style they were created with.</p>
+</div>
+<button type="button" id="closeSettingsDialog" class="dialog-close" aria-label="Close">×</button>
+</div>
+<section class="settings-section">
+<h3>Default styles for new objects</h3>
+<div id="settingsStyleList" class="settings-style-list"></div>
+</section>
+<section class="settings-section">
+<h3>Testing</h3>
+<p class="settings-note">Loads a labeled scene with a 400 px square, a 200 px circle, a 300 × 200 px triangle, and a 500 mm scale bar.</p>
+<button type="button" id="sampleImageBtn" class="button dialog-secondary">Load Sample Scene</button>
+</section>
+<div class="dialog-actions settings-actions">
+<button type="button" id="resetSettingsBtn" class="button dialog-secondary">Reset to Defaults</button>
+<button type="submit" class="button primary">Done</button>
+</div>
+</form>
+</dialog>
+<dialog id="newProjectDialog" class="project-dialog">
+<form id="newProjectForm" class="dialog-form">
+<div class="dialog-heading">
+<div>
+<h2>New Project</h2>
+<p>Enter the details that will appear in the Project panel.</p>
+</div>
+<button type="button" id="closeNewProjectDialog" class="dialog-close" aria-label="Close">×</button>
+</div>
+<p id="newProjectWarning" class="dialog-warning" hidden>The current project contains images. Creating a new project will discard any unsaved changes.</p>
+<label>Project name<input id="newProjectName" required maxlength="120" autocomplete="off"></label>
+<label>Case / Reference<input id="newCaseNumber" maxlength="120" autocomplete="off"></label>
+<label>Notes<textarea id="newProjectNotes" rows="4"></textarea></label>
+<div class="dialog-actions">
+<button type="button" id="cancelNewProject" class="button dialog-secondary">Cancel</button>
+<button type="submit" class="button primary">Create Project</button>
+</div>
+</form>
+</dialog>
+<dialog id="textDialog" class="project-dialog">
+<form id="textForm" class="dialog-form">
+<div class="dialog-heading">
+<div>
+<h2>Add Text</h2>
+<p>Type the annotation and set its color and size.</p>
+</div>
+<button type="button" id="closeTextDialog" class="dialog-close" aria-label="Close">×</button>
+</div>
+<label>Text<textarea id="textDialogValue" rows="3" required maxlength="500" autocomplete="off" autofocus></textarea></label>
+<div class="text-style-row">
+<label>Color<input id="textDialogColor" type="color"></label>
+<label>Font size<input id="textDialogSize" type="number" min="8" max="96" step="1"></label>
+</div>
+<div class="dialog-actions">
+<button type="button" id="cancelTextDialog" class="button dialog-secondary">Cancel</button>
+<button type="submit" class="button primary">Place Text</button>
+</div>
+</form>
+</dialog>
+<dialog id="closePolygonDialog" class="project-dialog">
+<form method="dialog" class="dialog-form">
+<div class="dialog-heading">
+<div>
+<h2>Close Polygon?</h2>
+<p>Finish this shape now, or keep adding points.</p>
+</div>
+</div>
+<div class="dialog-actions">
+<button value="keep" class="button dialog-secondary">Keep Drawing</button>
+<button value="close" class="button primary">Close</button>
+</div>
+</form>
+</dialog>
+<input id="imageInput" type="file" accept="image/*" multiple hidden>
+<input id="projectInput" type="file" accept=".elp,application/octet-stream" hidden>
+<script src="app.js"></script>
+</body>
+</html>
