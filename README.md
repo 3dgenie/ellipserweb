@@ -1,147 +1,108 @@
-# ellipserweb
-Image drawing tools
 # ELlipserWeb
 
-ELlipserWeb is a browser-based image measurement and annotation tool developed for forensic investigators, crime scene personnel, researchers, students and others who need to perform measurements directly from photographs.
+Browser-based photographic measurement and bloodstain ellipse documentation. It is a static HTML, CSS, and JavaScript app with no Node or npm dependencies. Images and measurements stay on the local device.
 
-The application runs locally in the user’s browser. Images and project data are not uploaded to a server by the application.
+Public site: [ellipserweb.ai2-3d.com](https://ellipserweb.ai2-3d.com)
 
-## Development Status
+## Run locally
 
-ELlipserWeb is currently a prototype under active development. Features, controls, calculations and project-file compatibility may change as the application is tested and improved.
+Open `index.html` in a modern browser (Chrome or Edge work best for save dialogs), or serve this folder:
 
-The current version should not be considered validated for operational forensic use.
+```powershell
+.\serve.ps1
+```
 
-## Current Features
+That starts `http://127.0.0.1:8765/`. To preview the published copy instead:
 
-* Load and work with multiple images
-* Calibrate an image using a known distance
-* Measure scaled distances
-* Measure angles on scaled images
-* Create and adjust circles
-* Create and adjust ellipses
-* Calculate ellipse dimensions and angles
-* Create open polylines
-* Create closed polygons
-* Calculate scaled perimeter and area
-* Organize images and measurements in a structure panel
-* Show, hide and lock individual objects
-* Display properties for selected objects
-* Save projects as `.elp` files
-* Reopen saved `.elp` projects
-* Export images with measurement overlays
+```powershell
+.\build-deploy.ps1
+.\serve-dist.ps1
+```
 
-## Basic Controls
+## File menu
 
-* **Left mouse button:** Create or select objects
-* **Mouse wheel:** Zoom
-* **Right mouse button:** Pan the image
-* **Right-click while drawing:** Complete the current polyline or polygon
-* **Delete key:** Remove the selected object
+| Command | What it does |
+|---|---|
+| **New** | Clears the current project (after a confirm) |
+| **Open** | Opens a saved `.elp` project |
+| **Save** | Saves the project as `.elp` (image plus measurements) |
+| **Import → Image** | Loads one or more photos |
+| **Export → CSV Report** | Spreadsheet of objects and stains |
+| **Export → PDF Report** | Printable report including stain graphs |
+| **Export → Marked Image** | PNG of the photo with overlays |
 
-## Running ELlipserWeb
+Save, CSV, PNG, and `.elp` use the system Save As dialog when the browser supports it; otherwise they download to the default folder. PDF uses the browser print dialog — choose **Save as PDF**.
 
-ELlipserWeb currently uses standard HTML, CSS and JavaScript and does not require a build process.
+Help (`?`) and Settings (gear) sit on the right of the top bar.
 
-To run it locally:
+## Tools
 
-1. Download or clone the repository.
-2. Open the project folder in a code editor such as Cursor.
-3. Open `index.html` in a modern web browser.
+**Select** (Esc or `V`) sits at the top of the rail. Use it to click objects without drawing a new one.
 
-A local web server, such as the Live Server extension for Cursor or Visual Studio Code, can also be used during development.
+| Tool | Shortcut | Notes |
+|---|---|---|
+| Scale | `S` | Required before Auto Detect |
+| Measure | `P` point, `D` distance, `A` angle | Triangle on the button switches variants |
+| Circle | `C` | |
+| Ellipse | `E` full, `H` half | Triangle on the button; **Assisted** is the stain wizard |
+| Polyline | `L` | Right-click finishes |
+| Polygon | `G` | Close by clicking the first point or right-click |
+| Text | `T` | Click to place, then edit wording |
 
-## Project Files
+Undo / redo: `Ctrl+Z` / `Ctrl+Y`. Flip a selected ellipse: `F`. Delete: `Delete`.
 
-* `index.html` — Main application interface
-* `styles.css` — Interface styling and layout
-* `app.js` — Application logic, image handling and measurement tools
-* `README.md` — Project information and instructions
+Mouse wheel zooms. Right-click pans, except while drawing a polyline, polygon, or stain region (then it finishes the shape).
 
-## Privacy and Data Handling
+Selecting an object shows handles. Drag a handle to edit that point; drag elsewhere on the object to move it. **Locked** in Properties disables both.
 
-ELlipserWeb is designed to process images and measurements locally in the browser.
+## Half ellipse
 
-The application does not currently transmit case images, measurements or project information to a remote server. Images and project information leave the user’s device only when the user intentionally exports, saves or shares them.
+A half ellipse fits only the well-defined front of a stain and doubles that length, so a distorted tail is less likely to bias the fit. Draw from the leading tip backwards. Labels on the canvas show **L · W · α · γ**. Properties report length (full, twice the fitted half), width, alpha, and gamma — not a separate half-length field.
 
-Users remain responsible for following their organization’s requirements concerning:
+## Stains (Assisted)
 
-* Evidence handling
-* Case confidentiality
-* Personal information
-* Data security
-* File retention
-* Validation and documentation
+Needs a scale on the image. Open from the Ellipse triangle → **Assisted**, or **Reopen Stains** in Properties.
 
-Users should verify this behaviour whenever the application is updated or deployed in a new environment.
+The wizard covers stain color, background, small/large size, **General Stain Direction** (drag toward the tails; leading edge at the start of the arrow), optional search and exclude regions, then Auto Detect. **Manually Mark** uses the same half-ellipse drag as the ellipse tool. `F` or Properties can flip a stain that faces the wrong way.
 
-## Intended Use and Limitations
+Each stain is a numbered half ellipse. Hover to highlight, click to edit, right-click or Delete to remove. Double-click the **Stains** row in Structure to collapse or expand the list. Deleting the Stains row removes all of its stains.
 
-ELlipserWeb is intended as a general image measurement, documentation, research and training tool.
+**Graphs** (from the Stains dialog or Properties) shows:
 
-Measurements derived from photographs may be affected by:
+- Alpha histogram
+- Width histogram
+- Gamma rose (direction)
+- Width vs alpha scatter
 
-* Image resolution and compression
-* Camera perspective
-* Lens distortion
-* Calibration accuracy
-* Scale placement
-* Surface orientation
-* Object geometry
-* Image editing or resizing
-* User technique
+Click a small chart to open a larger view you can pan and zoom. Those graphs are included in the PDF report.
 
-The application does not automatically correct for perspective distortion, lens distortion or out-of-plane geometry unless a specific correction method is implemented and documented.
+CSV stain columns include number, length, width, alpha, gamma, and auto vs manual.
 
-Results should be independently checked before being relied upon for investigative, scientific, operational or legal purposes.
+## Settings
 
-## Browser Compatibility
+Gear button. Defaults for color, line width, point marker style, ellipse vertex handles, text size, and scale units apply to **new** objects only. Preferences live in this browser (`localStorage`), not in the `.elp` file.
 
-A current desktop version of one of the following browsers is recommended:
+**Load Sample Scene** is a labeled geometry scene. **Load Stain Scene** loads the HemoVision bloodstain photo for Auto Detect practice.
 
-* Google Chrome
-* Microsoft Edge
-* Mozilla Firefox
-* Apple Safari
+## Structure and panels
 
-Some controls are designed primarily for use with a mouse and keyboard. Mobile and touchscreen behaviour may differ.
+Tabs on Structure, Project, and the thumbnail strip collapse those panels so the canvas has more room. The left ‹ / › control collapses Structure and Properties together.
 
-## Testing and Validation
+## Files in this folder
 
-Before ELlipserWeb is used operationally, its measurement functions should be tested against known ground-truth data.
+- `index.html`, `styles.css`, `app.js` — the application
+- `build-deploy.ps1` — writes a compacted copy to `dist\`
+- `serve.ps1` / `serve-dist.ps1` — local servers
+- `samples\` — optional demo images (not copied into `dist`)
 
-Testing should consider:
+## Publishing to GitHub Pages
 
-* Different image sizes and aspect ratios
-* Multiple browsers and operating systems
-* Known distances and angles
-* Ellipse and circle fitting
-* Polygon area and perimeter
-* Saved and reopened projects
-* Exported overlay accuracy
-* Repeated measurements by different users
+1. Run `build-deploy.ps1`. Upload **only** the files inside `dist\` (`index.html`, `styles.css`, `app.js`). Do not upload this README, the scripts, or `samples\`.
+2. Put them in the GitHub Pages repo that serves [ellipserweb.ai2-3d.com](https://ellipserweb.ai2-3d.com) (currently `3dgenie.github.io`, custom domain already set).
+3. If the site is in a subfolder, keep `index.html` at the web root of that folder.
 
-Known limitations, uncertainty and test results should be documented.
+The script strips comments and extra whitespace and adds a copyright banner. That is not encryption; anything the browser runs can be viewed. Identifier names are left readable because there is no Node/terser step on the development machine.
 
-## Feedback
+## Notes
 
-Bug reports, measurement test results and suggested improvements are welcome.
-
-When reporting a problem, please include:
-
-* Browser and operating system
-* Steps required to reproduce the problem
-* Expected result
-* Actual result
-* Screenshots, if appropriate
-* Whether the project was newly created or opened from an `.elp` file
-
-Do not include confidential case information or evidentiary images in public bug reports.
-
-## Copyright and Use
-
-Copyright © 2026 Eugene Liscio / ai2-3D. All rights reserved.
-
-No licence is currently granted for the reproduction, modification, distribution or commercial use of this source code.
-
-The public availability of this repository does not place the source code in the public domain or grant permission for reuse. Permission may be granted separately in writing by the copyright holder.
+This is a working prototype. Before operational or evidentiary use, measurements, coordinate transforms, file compatibility, browser behavior, and export accuracy should be formally tested and documented.
