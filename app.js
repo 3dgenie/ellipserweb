@@ -71,8 +71,83 @@ textPoint: null,
 dragging: null,
 panning: null,
 stainMode: null,
+stainVariant: "assisted",
+stainWizardOpen: false,
+stainWizardIndex: 0,
+stainWizardPos: { left: 92, top: 78 },
+stainWizardDrag: null,
+hoverObjectId: null,
+selectedSeedId: null,
 dpr: window.devicePixelRatio || 1,
+history: { past: [], future: [], applying: false },
 };
+function cloneJson(value) {
+return JSON.parse(JSON.stringify(value));
+}
+function captureHistory() {
+return {
+activeImageId: state.activeImageId,
+selectedObjectId: state.selectedObjectId,
+selectedSeedId: state.selectedSeedId,
+stainMode: state.stainMode,
+stainVariant: state.stainVariant,
+projectStarted: state.projectStarted,
+projectMeta: {
+name: state.project.name,
+caseNumber: state.project.caseNumber,
+notes: state.project.notes,
+},
+images: state.project.images.map((image) => ({
+image,
+objects: cloneJson(image.objects),
+calibrationId: image.calibration?.id || null,
+})),
+};
+}
+function recordHistory() {
+if (state.history.applying) return;
+state.history.past.push(captureHistory());
+if (state.history.past.length > 80) state.history.past.shift();
+state.history.future = [];
+}
+function clearHistory() {
+state.history.past = [];
+state.history.future = [];
+}
+function applyHistory(snap) {
+state.history.applying = true;
+state.project.images = snap.images.map((entry) => {
+const image = entry.image;
+image.objects = cloneJson(entry.objects);
+image.calibration = image.objects.find((object) => object.id === entry.calibrationId) || null;
+return image;
+});
+state.project.name = snap.projectMeta.name;
+state.project.caseNumber = snap.projectMeta.caseNumber;
+state.project.notes = snap.projectMeta.notes;
+state.projectStarted = snap.projectStarted;
+state.activeImageId = snap.activeImageId;
+state.selectedObjectId = snap.selectedObjectId;
+state.selectedSeedId = snap.selectedSeedId;
+state.stainMode = snap.stainMode;
+if (snap.stainVariant && snap.stainVariant !== state.stainVariant) setStainVariant(snap.stainVariant);
+state.draft = null;
+state.dragging = null;
+stainMaskCache.clear();
+populateProjectMetadata();
+refreshUI();
+state.history.applying = false;
+}
+function undo() {
+if (!state.history.past.length) return;
+state.history.future.push(captureHistory());
+applyHistory(state.history.past.pop());
+}
+function redo() {
+if (!state.history.future.length) return;
+state.history.past.push(captureHistory());
+applyHistory(state.history.future.pop());
+}
 function freshProject() {
 return { format: "ELlipserWeb Project", version: 1, name: "Untitled Project", caseNumber: "", notes: "", images: [] };
 }
@@ -84,6 +159,14 @@ return state.project.images.find((image) => image.id === state.activeImageId) ||
 }
 function selectedObject() {
 return activeImage()?.objects.find((object) => object.id === state.selectedObjectId) || null;
+}
+function flipSelectedEllipse() {
+const object = selectedObject();
+if (!object || object.locked) return;
+if (object.type !== "ellipse" && object.type !== "halfEllipse") return;
+recordHistory();
+object.rotation = normalizeAngle((object.rotation || 0) + Math.PI);
+refreshUI();
 }
 function unitScale(image = activeImage()) {
 if (!image?.calibration) return null;
@@ -138,10 +221,10 @@ if (object.type === "angle") return `${angleDegrees(object.p1, object.p2, object
 if (object.type === "ellipse") {
 const major = Math.max(object.rx, object.ry) * 2;
 const minor = Math.min(object.rx, object.ry) * 2;
-return `${lengthLabel(major)} × ${lengthLabel(minor)} · α ${ellipseAlphaDegrees(object).toFixed(1)}° · γ ${ellipseGammaDegrees(object).toFixed(1)}°`;
+return `L ${lengthLabel(major)} · W ${lengthLabel(minor)} · α ${ellipseAlphaDegrees(object).toFixed(1)}° · γ ${ellipseGammaDegrees(object).toFixed(1)}°`;
 }
 if (object.type === "halfEllipse") {
-return `½L ${lengthLabel(object.rx)} · L ${lengthLabel(object.rx * 2)} × W ${lengthLabel(object.ry * 2)} · α ${ellipseAlphaDegrees(object).toFixed(1)}° · γ ${ellipseGammaDegrees(object).toFixed(1)}°`;
+return `L ${lengthLabel(object.rx * 2)} · W ${lengthLabel(object.ry * 2)} · α ${ellipseAlphaDegrees(object).toFixed(1)}° · γ ${ellipseGammaDegrees(object).toFixed(1)}°`;
 }
 if (object.type === "circle") {
 const diameter = Math.abs(object.rx) * 2;
@@ -157,8 +240,8 @@ return `P ${lengthLabel(perimeter)} · A ${area}`;
 if (object.type === "point") return `${Math.round(object.p.x)}, ${Math.round(object.p.y)} px`;
 if (object.type === "text") return object.text;
 if (object.type === "stainCount") {
-const count = sessionStains(object, image).length;
-return `${count} stain${count === 1 ? "" : "s"}`;
+const counts = stainSourceCounts(object, image);
+return `${counts.total} total · ${counts.auto} auto · ${counts.manual} manual`;
 }
 return "—";
 }
@@ -199,12 +282,30 @@ const panX = exportMode ? 0 : image.view.panX;
 const panY = exportMode ? 0 : image.view.panY;
 targetCtx.setTransform(zoom * dpr, 0, 0, zoom * dpr, panX * dpr, panY * dpr);
 targetCtx.drawImage(image.element, 0, 0, image.width, image.height);
-if (!exportMode && image.id === state.activeImageId && (state.tool === "stainCount" || state.stainMode || selectedObject()?.type === "stainCount")) drawStainMask(targetCtx, image);
+if (!exportMode && image.id === state.activeImageId && (state.tool === "stainCount" || state.stainMode || selectedObject()?.type === "stainCount") && stainSession(image)?.visible !== false) drawStainMask(targetCtx, image);
 for (const object of image.objects) {
-if (object.visible === false) continue;
+if (!objectIsDrawn(object, image)) continue;
 drawObject(targetCtx, object, zoom, object.id === state.selectedObjectId, exportMode);
 }
+if (!exportMode && image.id === state.activeImageId && state.stainMode === "centers" && stainSession(image)?.visible !== false) drawSeedCenters(targetCtx, image, zoom);
 if (state.draft && image.id === state.activeImageId) drawDraft(targetCtx, state.draft, zoom);
+}
+function drawHalfEllipseShape(drawCtx, object, zoom) {
+const rx = Math.abs(object.rx);
+const ry = Math.abs(object.ry);
+const rotation = object.rotation || 0;
+drawCtx.beginPath();
+drawCtx.ellipse(object.cx, object.cy, rx, ry, rotation, -Math.PI / 2, Math.PI / 2);
+drawCtx.closePath();
+drawCtx.stroke();
+drawCtx.save();
+drawCtx.globalAlpha *= 0.38;
+drawCtx.setLineDash([5 / zoom, 4 / zoom]);
+drawCtx.lineWidth = Math.max(1 / zoom, ((object.lineWidth || 2) * 0.75) / zoom);
+drawCtx.beginPath();
+drawCtx.ellipse(object.cx, object.cy, rx, ry, rotation, Math.PI / 2, Math.PI * 1.5);
+drawCtx.stroke();
+drawCtx.restore();
 }
 function lineStyle(drawCtx, object, zoom) {
 drawCtx.strokeStyle = object.color || "#19c9d2";
@@ -217,8 +318,10 @@ drawCtx.setLineDash([]);
 function drawObject(drawCtx, object, zoom, isSelected, exportMode) {
 const showLabel = exportMode || isSelected;
 const showHandles = isSelected && !exportMode;
+const hovered = !exportMode && object.id === state.hoverObjectId && !isSelected;
 drawCtx.save();
 lineStyle(drawCtx, object, zoom);
+if (hovered) drawCtx.lineWidth = ((object.lineWidth || 2) + 1.5) / zoom;
 if (object.type === "distance" || object.type === "scale" || object.type === "reference") {
 drawCtx.beginPath(); drawCtx.moveTo(object.p1.x, object.p1.y); drawCtx.lineTo(object.p2.x, object.p2.y); drawCtx.stroke();
 if (showLabel) drawLabel(drawCtx, objectValue(object), midpoint(object.p1, object.p2), zoom);
@@ -228,10 +331,7 @@ drawCtx.beginPath(); drawCtx.moveTo(object.p1.x, object.p1.y); drawCtx.lineTo(ob
 if (showLabel) drawLabel(drawCtx, objectValue(object), object.p2, zoom);
 if (showHandles) drawHandles(drawCtx, [object.p1, object.p2, object.p3], zoom);
 } else if (object.type === "halfEllipse") {
-drawCtx.beginPath();
-drawCtx.ellipse(object.cx, object.cy, Math.abs(object.rx), Math.abs(object.ry), object.rotation || 0, -Math.PI / 2, Math.PI / 2);
-drawCtx.closePath();
-drawCtx.stroke();
+drawHalfEllipseShape(drawCtx, object, zoom);
 if (object.stainNumber) drawLabel(drawCtx, String(object.stainNumber), rotateEllipsePoint(object, object.rx, 0), zoom);
 if (showLabel) drawLabel(drawCtx, objectValue(object), rotateEllipsePoint(object, object.rx, -object.ry), zoom);
 if (showHandles) drawEllipseControls(drawCtx, object, zoom);
@@ -242,6 +342,11 @@ drawPolygonPath(drawCtx, object.detectRegion, true);
 drawCtx.strokeStyle = "#e06a6a";
 (object.excludeRegions || []).forEach((region) => drawPolygonPath(drawCtx, region, true));
 drawCtx.setLineDash([]);
+if (Number.isFinite(object.direction) && object.directionStart && object.directionEnd) {
+drawCtx.strokeStyle = "#f09a35";
+drawCtx.fillStyle = "#f09a35";
+drawDirectionArrow(drawCtx, object.directionStart, object.directionEnd, zoom);
+}
 } else if (object.type === "ellipse" || object.type === "circle") {
 drawCtx.beginPath(); drawCtx.ellipse(object.cx, object.cy, Math.abs(object.rx), Math.abs(object.ry), object.rotation || 0, 0, Math.PI * 2); drawCtx.stroke();
 const labelPoint = rotateEllipsePoint(object, object.rx, -object.ry);
@@ -278,14 +383,13 @@ drawCtx.beginPath();
 drawCtx.ellipse(geometry.cx, geometry.cy, geometry.rx, geometry.ry, geometry.rotation, 0, Math.PI * 2);
 drawCtx.stroke();
 } else if (draft.type === "halfEllipse" && draft.start && draft.current) {
-const geometry = ellipseFromDrag(draft.start, draft.current, true);
-drawCtx.beginPath();
-drawCtx.ellipse(geometry.cx, geometry.cy, geometry.rx, geometry.ry, geometry.rotation, -Math.PI / 2, Math.PI / 2);
-drawCtx.closePath();
-drawCtx.stroke();
+drawHalfEllipseShape(drawCtx, ellipseFromDrag(draft.start, draft.current, true), zoom);
 } else if (draft.type === "circle" && draft.start && draft.current) {
 const radius = distance(draft.start, draft.current);
 drawCtx.beginPath(); drawCtx.arc(draft.start.x, draft.start.y, radius, 0, Math.PI * 2); drawCtx.stroke();
+} else if (draft.type === "stainDirection" && draft.start && draft.current) {
+drawCtx.setLineDash([]);
+drawDirectionArrow(drawCtx, draft.start, draft.current, zoom);
 } else if (draft.type === "stainSample" && draft.start && draft.current) {
 drawCtx.beginPath();
 drawCtx.moveTo(draft.start.x, draft.start.y);
@@ -341,6 +445,20 @@ drawCtx.fillStyle = "rgba(0, 0, 0, .82)";
 drawCtx.fillRect(x - pad, y - fontSize - pad / 2, width + pad * 2, fontSize + pad);
 drawCtx.fillStyle = "#ffffff";
 drawCtx.fillText(text, x, y);
+}
+function drawDirectionArrow(drawCtx, start, end, zoom) {
+drawCtx.beginPath();
+drawCtx.moveTo(start.x, start.y);
+drawCtx.lineTo(end.x, end.y);
+drawCtx.stroke();
+const angle = Math.atan2(end.y - start.y, end.x - start.x);
+const head = 14 / Math.max(zoom, .01);
+drawCtx.beginPath();
+drawCtx.moveTo(end.x, end.y);
+drawCtx.lineTo(end.x - head * Math.cos(angle - .45), end.y - head * Math.sin(angle - .45));
+drawCtx.lineTo(end.x - head * Math.cos(angle + .45), end.y - head * Math.sin(angle + .45));
+drawCtx.closePath();
+drawCtx.fill();
 }
 function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 function rotateEllipsePoint(object, localX, localY) {
@@ -439,6 +557,8 @@ drawCtx.restore();
 }
 async function addImageFiles(files) {
 const valid = [...files].filter((file) => file.type.startsWith("image/"));
+if (!valid.length) return;
+recordHistory();
 for (const file of valid) {
 const bytes = new Uint8Array(await file.arrayBuffer());
 const dataUrl = await fileToDataUrl(file);
@@ -468,6 +588,91 @@ populateProjectMetadata();
 const blob = await createSampleSceneBlob();
 const file = new File([blob], "sample-scene.png", { type: "image/png" });
 await addImageFiles([file]);
+}
+async function loadStainSampleImage() {
+closeSettingsDialog();
+if (!state.projectStarted) {
+state.project = freshProject();
+state.projectStarted = true;
+state.project.name = "Stain Detection Scene";
+populateProjectMetadata();
+}
+const response = await fetch("samples/hemovision-stains.jpg");
+if (!response.ok) {
+alert("Could not load samples/hemovision-stains.jpg.");
+return;
+}
+const blob = await response.blob();
+const file = new File([blob], "hemovision-stains.jpg", { type: "image/jpeg" });
+await addImageFiles([file]);
+const image = state.project.images[state.project.images.length - 1];
+if (!image) return;
+state.activeImageId = image.id;
+const y = image.height - Math.max(24, image.height * 0.04);
+const scale = makeObject("scale", {
+p1: { x: image.width * 0.08, y },
+p2: { x: image.width * 0.38, y },
+knownLength: 100,
+units: "mm",
+});
+image.objects.push(scale);
+image.calibration = scale;
+refreshUI();
+requestAnimationFrame(fitActiveImage);
+}
+function stainSampleMarks() {
+return [
+{ cx: 190, cy: 150, length: 92, width: 36, angle: 0.12 },
+{ cx: 420, cy: 130, length: 68, width: 28, angle: -0.18 },
+{ cx: 650, cy: 170, length: 124, width: 46, angle: 0.32 },
+{ cx: 900, cy: 145, length: 52, width: 22, angle: 0.08 },
+{ cx: 230, cy: 350, length: 108, width: 40, angle: -0.36 },
+{ cx: 490, cy: 330, length: 78, width: 32, angle: 0.22 },
+{ cx: 760, cy: 370, length: 142, width: 50, angle: -0.08 },
+{ cx: 1000, cy: 310, length: 64, width: 26, angle: 0.48 },
+{ cx: 310, cy: 540, length: 116, width: 42, angle: 0.1 },
+{ cx: 560, cy: 560, length: 46, width: 20, angle: -0.28 },
+{ cx: 840, cy: 560, length: 98, width: 36, angle: 0.2 },
+];
+}
+function drawRedStain(drawCtx, stain) {
+drawCtx.save();
+drawCtx.translate(stain.cx, stain.cy);
+drawCtx.rotate(stain.angle);
+drawCtx.fillStyle = "#c42b2b";
+drawCtx.beginPath();
+drawCtx.ellipse(stain.length * 0.12, 0, stain.length * 0.38, stain.width * 0.5, 0, 0, Math.PI * 2);
+drawCtx.fill();
+drawCtx.beginPath();
+drawCtx.moveTo(0, stain.width * 0.42);
+drawCtx.quadraticCurveTo(-stain.length * 0.18, stain.width * 0.16, -stain.length * 0.52, 0);
+drawCtx.quadraticCurveTo(-stain.length * 0.18, -stain.width * 0.16, 0, -stain.width * 0.42);
+drawCtx.closePath();
+drawCtx.fill();
+drawCtx.restore();
+}
+function createStainSceneBlob() {
+const width = 1200;
+const height = 800;
+const sample = document.createElement("canvas");
+sample.width = width;
+sample.height = height;
+const drawCtx = sample.getContext("2d");
+drawCtx.fillStyle = "#ffffff";
+drawCtx.fillRect(0, 0, width, height);
+stainSampleMarks().forEach((stain) => drawRedStain(drawCtx, stain));
+drawCtx.strokeStyle = "#333333";
+drawCtx.lineWidth = 8;
+drawCtx.beginPath();
+drawCtx.moveTo(100, 760);
+drawCtx.lineTo(600, 760);
+drawCtx.stroke();
+drawCtx.fillStyle = "#333333";
+drawCtx.fillRect(96, 752, 8, 16);
+drawCtx.fillRect(596, 752, 8, 16);
+drawCtx.font = "700 18px Inter, sans-serif";
+drawCtx.fillText("SCALE 500 px  =  500 mm", 100, 740);
+return new Promise((resolve) => sample.toBlob(resolve, "image/png"));
 }
 function createSampleSceneBlob() {
 const width = 1200;
@@ -538,15 +743,19 @@ image.src = src;
 const ellipseVariants = {
 ellipse: { name: "Ellipse", title: "Ellipse (E)", icon: `<ellipse cx="16" cy="12" rx="12.5" ry="7.5"></ellipse>` },
 halfEllipse: { name: "Half", title: "Half Ellipse (H)", icon: `<path d="M16 4.5A12.5 7.5 0 0 1 16 19.5Z"></path>` },
+assisted: { name: "Assisted", title: "Assisted stains (N)", icon: `<path d="M7 5.5A5 3 0 0 1 7 11.5Z"/><path d="M16 9.5A6 3.6 0 0 1 16 16.7Z"/>`, tool: "stainCount" },
+manual: { name: "Manual", title: "Manual stains (N)", icon: `<path d="M12 4.5A10 6 0 0 1 12 16.5Z"/>`, tool: "stainCount" },
 };
 function setEllipseVariant(variant) {
 const button = $("#ellipseTool");
-const config = ellipseVariants[variant];
-button.dataset.tool = variant;
+const mapped = variant === "stainCount" ? (state.stainVariant || "assisted") : variant;
+const config = ellipseVariants[mapped];
+if (!button || !config) return;
+button.dataset.tool = config.tool || mapped;
 button.title = config.title;
 button.querySelector(".tool-icon").innerHTML = config.icon;
 button.querySelector(".tool-name").textContent = config.name;
-$$("#ellipseFlyout button").forEach((option) => option.classList.toggle("active", option.dataset.variant === variant));
+$$("#ellipseFlyout button").forEach((option) => option.classList.toggle("active", option.dataset.variant === mapped));
 }
 const pointStyles = {
 cross: { name: "Cross", icon: `<path d="M16 5v14M9 12h14"></path>` },
@@ -577,6 +786,16 @@ button.dataset.tool = variant;
 button.title = `${config.title} — Measure`;
 button.querySelector(".tool-icon").innerHTML = measureVariantIcon(variant);
 $$("#measureFlyout button").forEach((option) => option.classList.toggle("active", option.dataset.variant === variant));
+}
+function setStainVariant(variant) {
+state.stainVariant = variant === "manual" ? "manual" : "assisted";
+if (state.tool === "stainCount") setEllipseVariant(state.stainVariant);
+}
+function enterManualStains() {
+setStainVariant("manual");
+closeStainWizard();
+state.stainMode = "manual";
+state.draft = null;
 }
 function toggleFlyout(toggle, open) {
 const flyout = $(`#${toggle.getAttribute("aria-controls")}`);
@@ -619,17 +838,23 @@ if (tool === "stainCount" && !activeImage()?.calibration) {
 updateHint("Create a scale on this image before counting stains.");
 return;
 }
-if (tool !== "stainCount") state.stainMode = null;
+if (tool !== "stainCount") {
+state.stainMode = null;
+closeStainWizard();
+}
 const keepStainSession = tool === "stainCount";
 const clearedSelection = tool !== "select" && !keepStainSession && state.selectedObjectId !== null;
 if (clearedSelection) state.selectedObjectId = null;
 state.tool = tool;
 state.draft = null;
 if (ellipseVariants[tool]) setEllipseVariant(tool);
+else if (keepStainSession) setEllipseVariant(state.stainVariant);
 if (measureVariants[tool]) setMeasureVariant(tool);
 if (keepStainSession) {
 const session = ensureStainSession();
 if (session) state.selectedObjectId = session.id;
+if (state.stainVariant === "manual") enterManualStains();
+else openStainWizard();
 }
 $$(".tool[data-tool]").forEach((button) => button.classList.toggle("active", button.dataset.tool === tool));
 canvas.style.cursor = tool === "select" ? "default" : "crosshair";
@@ -642,22 +867,11 @@ renderMeasurements();
 draw();
 }
 function updateHint(message = "") {
-const hints = {
-scale: "Click two points, then enter the known length in Properties.",
-point: "Click to place a point marker. The tool stays active; right-click or press Escape when finished.",
-distance: "Click the start and end points.",
-angle: "Click three points; the second point is the vertex.",
-circle: "Click the center and drag to set the radius.",
-ellipse: "Drag from the leading tip back to the trailing tip, then set the width with the side handles.",
-halfEllipse: "Drag from the leading tip back to the middle of the width, then set the width with the side handles.",
-polyline: "Click points. Click the first point to close, or right-click to finish open.",
-polygon: "Click boundary points. Click the first point to close, or right-click to close when possible.",
-text: "Click the image to place a text annotation. A window will ask for the wording, color, and size.",
-stainCount: stainCountHint(),
-};
-const hint = message || hints[state.tool] || "";
-$("#drawingHint").textContent = hint;
-$("#drawingHint").hidden = !hint;
+const hintEl = $("#drawingHint");
+if (hintEl) {
+hintEl.textContent = "";
+hintEl.hidden = true;
+}
 }
 function makeObject(type, data) {
 const image = activeImage();
@@ -667,6 +881,7 @@ const style = stylePrefs(type);
 return { id: uid(type), type, name: `${label} ${count}`, visible: true, locked: false, color: style.color, lineWidth: style.lineWidth, ...data };
 }
 function completeObject(object, keepTool = false) {
+recordHistory();
 const image = activeImage();
 image.objects.push(object);
 if (object.type === "scale") {
@@ -680,16 +895,6 @@ if (!keepTool) setTool("select");
 refreshUI();
 }
 const stainMaskCache = new Map();
-function stainCountHint() {
-if (state.stainMode === "stainColor") return "Click a typical stain body to sample its color.";
-if (state.stainMode === "backgroundColor") return "Click the surface next to the stains to sample the background.";
-if (state.stainMode === "smallSize") return "Drag across a typical small stain.";
-if (state.stainMode === "largeSize") return "Drag across a typical large stain.";
-if (state.stainMode === "detect") return "Click points around the search area. Click the first point or right-click to close.";
-if (state.stainMode === "exclude") return "Click points around an area to skip. Click the first point or right-click to close.";
-if (state.stainMode === "manual") return "Drag from the leading tip back to the width, like Half Ellipse. Right-click when finished.";
-return "Sample stain and background colors, then Auto Detect. Use Manually Mark for stains the detector misses.";
-}
 function stainSession(image = activeImage()) {
 return image?.objects.find((object) => object.type === "stainCount") || null;
 }
@@ -697,20 +902,455 @@ function sessionStains(session, image = activeImage()) {
 if (!session || !image) return [];
 return image.objects.filter((object) => object.sessionId === session.id);
 }
+function stainSourceCounts(session, image = activeImage()) {
+let auto = 0, manual = 0;
+for (const stain of sessionStains(session, image)) {
+if (stain.source === "manual") manual += 1;
+else auto += 1;
+}
+return { total: auto + manual, auto, manual };
+}
+function stainCountSummary(session, image = activeImage()) {
+const counts = stainSourceCounts(session, image);
+return `${counts.total} total · ${counts.auto} auto · ${counts.manual} manual`;
+}
+function calibratedLength(pixels, image = activeImage()) {
+const scale = unitScale(image);
+const units = image?.calibration?.units || "px";
+return scale ? `${(pixels * scale).toFixed(2)} ${units}` : `${pixels.toFixed(1)} px`;
+}
+function numericStats(values) {
+if (!values.length) return null;
+const sorted = [...values].sort((a, b) => a - b);
+const n = sorted.length;
+const mean = sorted.reduce((sum, value) => sum + value, 0) / n;
+const mid = Math.floor(n / 2);
+const median = n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+const stdev = n > 1 ? Math.sqrt(sorted.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (n - 1)) : 0;
+return { mean, median, min: sorted[0], max: sorted[n - 1], stdev };
+}
+function stainDensityLabel(session, image = activeImage()) {
+const units = image?.calibration?.units || "px";
+const scale = unitScale(image) || 1;
+const stains = sessionStains(session, image);
+const regionArea = session.detectRegion?.length >= 3 ? polygonArea(session.detectRegion) : (image ? image.width * image.height : 0);
+const area = regionArea * scale * scale;
+const density = area > 0 ? stains.length / area : 0;
+return `${density < 0.001 ? density.toExponential(2) : density.toFixed(4)} / ${units}²`;
+}
+function svgEl(name, attrs = {}) {
+const el = document.createElementNS("http://www.w3.org/2000/svg", name);
+Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, String(value)));
+return el;
+}
+function stainChartPanel(title, caption, content) {
+const panel = document.createElement("figure");
+panel.className = "stain-chart-panel";
+panel.tabIndex = 0;
+panel.setAttribute("role", "button");
+panel.setAttribute("aria-label", `Enlarge ${title}`);
+const heading = document.createElement("h3");
+heading.textContent = title;
+const note = document.createElement("p");
+note.textContent = caption;
+panel.append(heading, content, note);
+const open = () => openStainChartViewer(title, caption, content);
+panel.addEventListener("click", open);
+panel.addEventListener("keydown", (event) => {
+if (event.key === "Enter" || event.key === " ") {
+event.preventDefault();
+open();
+}
+});
+return panel;
+}
+function histogramSvg(values, { min, max, bins, mean, median, formatTick }) {
+const counts = Array(bins).fill(0);
+const span = max - min || 1;
+values.forEach((value) => {
+let index = Math.floor((value - min) / span * bins);
+if (index < 0) index = 0;
+if (index >= bins) index = bins - 1;
+counts[index] += 1;
+});
+const peak = Math.max(1, ...counts);
+const width = 280, height = 132, left = 28, right = 8, top = 8, bottom = 22;
+const innerW = width - left - right, innerH = height - top - bottom;
+const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" });
+svg.append(svgEl("line", { x1: left, y1: top + innerH, x2: left + innerW, y2: top + innerH, stroke: "#4f4f4f", "stroke-width": 1 }));
+counts.forEach((count, i) => {
+const barW = innerW / bins;
+const barH = count / peak * innerH;
+svg.append(svgEl("rect", {
+x: left + i * barW + 1,
+y: top + innerH - barH,
+width: Math.max(0.5, barW - 2),
+height: barH,
+fill: "#f09a35",
+}));
+});
+const xOf = (value) => left + (value - min) / span * innerW;
+if (Number.isFinite(mean)) svg.append(svgEl("line", { x1: xOf(mean), y1: top, x2: xOf(mean), y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1.6 }));
+if (Number.isFinite(median) && Math.abs(median - mean) > span * 0.04) {
+svg.append(svgEl("line", { x1: xOf(median), y1: top, x2: xOf(median), y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1, "stroke-dasharray": "3 3" }));
+}
+[[left, formatTick(min)], [left + innerW, formatTick(max)]].forEach(([x, label], i) => {
+const text = svgEl("text", { x, y: height - 6, fill: "#a1a1a6", "font-size": 9, "text-anchor": i ? "end" : "start" });
+text.textContent = label;
+svg.append(text);
+});
+return svg;
+}
+function roseSvg(gammas) {
+const bins = 16;
+const counts = Array(bins).fill(0);
+gammas.forEach((gamma) => {
+const angle = ((gamma % 360) + 360) % 360;
+counts[Math.min(bins - 1, Math.floor(angle / 360 * bins))] += 1;
+});
+const peak = Math.max(1, ...counts);
+const cx = 80, cy = 80, maxR = 64;
+const svg = svgEl("svg", { viewBox: "0 0 160 160", role: "img" });
+svg.append(svgEl("circle", { cx, cy, r: maxR, fill: "none", stroke: "#3d3d3d" }));
+svg.append(svgEl("circle", { cx, cy, r: maxR * 0.5, fill: "none", stroke: "#303030" }));
+counts.forEach((count, i) => {
+if (!count) return;
+const a0 = i / bins * Math.PI * 2 - Math.PI / 2;
+const a1 = (i + 1) / bins * Math.PI * 2 - Math.PI / 2;
+const r = 10 + count / peak * (maxR - 10);
+const path = [
+`M ${cx} ${cy}`,
+`L ${cx + Math.cos(a0) * r} ${cy + Math.sin(a0) * r}`,
+`A ${r} ${r} 0 0 1 ${cx + Math.cos(a1) * r} ${cy + Math.sin(a1) * r}`,
+"Z",
+].join(" ");
+svg.append(svgEl("path", { d: path, fill: "#f09a35", "fill-opacity": 0.88, stroke: "#0b2238", "stroke-width": 0.6 }));
+});
+[["N", 80, 12], ["E", 152, 84], ["S", 80, 156], ["W", 8, 84]].forEach(([label, x, y]) => {
+const text = svgEl("text", { x, y, fill: "#a1a1a6", "font-size": 9, "text-anchor": "middle" });
+text.textContent = label;
+svg.append(text);
+});
+return svg;
+}
+function scatterSvg(xs, ys, { xMin, xMax, yMin, yMax, formatX, formatY }) {
+const width = 280, height = 150, left = 32, right = 10, top = 10, bottom = 24;
+const innerW = width - left - right, innerH = height - top - bottom;
+const xSpan = xMax - xMin || 1;
+const ySpan = yMax - yMin || 1;
+const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" });
+svg.append(svgEl("line", { x1: left, y1: top + innerH, x2: left + innerW, y2: top + innerH, stroke: "#4f4f4f" }));
+svg.append(svgEl("line", { x1: left, y1: top, x2: left, y2: top + innerH, stroke: "#4f4f4f" }));
+xs.forEach((x, i) => {
+const px = left + (x - xMin) / xSpan * innerW;
+const py = top + innerH - (ys[i] - yMin) / ySpan * innerH;
+svg.append(svgEl("circle", { cx: px, cy: py, r: 3, fill: "#19c9d2", "fill-opacity": 0.85 }));
+});
+const labels = [
+{ x: left, y: height - 6, text: formatX(xMin), anchor: "start" },
+{ x: left + innerW, y: height - 6, text: formatX(xMax), anchor: "end" },
+{ x: 4, y: top + 8, text: formatY(yMax), anchor: "start" },
+{ x: 4, y: top + innerH, text: formatY(yMin), anchor: "start" },
+];
+labels.forEach((item) => {
+const text = svgEl("text", { x: item.x, y: item.y, fill: "#a1a1a6", "font-size": 9, "text-anchor": item.anchor });
+text.textContent = item.text;
+svg.append(text);
+});
+return svg;
+}
+function stainLocationMap(stains, image) {
+const wrap = document.createElement("div");
+wrap.className = "stain-chart-map";
+const img = document.createElement("img");
+img.src = image.element.src;
+img.alt = "";
+const svg = svgEl("svg", {
+viewBox: `0 0 ${image.width} ${image.height}`,
+preserveAspectRatio: "xMidYMid meet",
+});
+const size = Math.max(image.width, image.height);
+stains.forEach((stain) => {
+const t = Math.min(1, Math.max(0, ellipseAlphaDegrees(stain) / 90));
+const fill = `rgb(${Math.round(240 - t * 200)}, ${Math.round(154 + t * 50)}, ${Math.round(53 + t * 160)})`;
+svg.append(svgEl("circle", {
+cx: stain.cx,
+cy: stain.cy,
+r: Math.max(4, size * 0.007),
+fill,
+"fill-opacity": 0.9,
+stroke: "#0b2238",
+"stroke-width": size * 0.0015,
+}));
+});
+wrap.append(img, svg);
+return wrap;
+}
+const stainChartViewerView = { x: 0, y: 0, scale: 1, drag: null };
+function applyStainChartViewerView() {
+const content = $("#stainChartViewerContent");
+if (!content) return;
+content.style.transform = `translate(${stainChartViewerView.x}px, ${stainChartViewerView.y}px) scale(${stainChartViewerView.scale})`;
+}
+function resetStainChartViewerView() {
+stainChartViewerView.x = 0;
+stainChartViewerView.y = 0;
+stainChartViewerView.scale = 1;
+stainChartViewerView.drag = null;
+applyStainChartViewerView();
+}
+function openStainChartViewer(title, caption, content) {
+const viewer = $("#stainChartViewer");
+$("#stainChartViewerTitle").textContent = title;
+$("#stainChartViewerCaption").textContent = caption;
+const host = $("#stainChartViewerContent");
+host.innerHTML = "";
+host.append(content.cloneNode(true));
+viewer.hidden = false;
+resetStainChartViewerView();
+}
+function closeStainChartViewer() {
+const viewer = $("#stainChartViewer");
+if (!viewer || viewer.hidden) return;
+viewer.hidden = true;
+$("#stainChartViewerContent").innerHTML = "";
+stainChartViewerView.drag = null;
+}
+function bindStainChartViewer() {
+const stage = $("#stainChartViewerStage");
+if (!stage || stage.dataset.bound) return;
+stage.dataset.bound = "true";
+stage.addEventListener("wheel", (event) => {
+event.preventDefault();
+event.stopPropagation();
+const rect = stage.getBoundingClientRect();
+const mx = event.clientX - rect.left;
+const my = event.clientY - rect.top;
+const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+const next = Math.min(14, Math.max(1, stainChartViewerView.scale * factor));
+const ratio = next / stainChartViewerView.scale;
+stainChartViewerView.x = mx - (mx - stainChartViewerView.x) * ratio;
+stainChartViewerView.y = my - (my - stainChartViewerView.y) * ratio;
+stainChartViewerView.scale = next;
+applyStainChartViewerView();
+}, { passive: false });
+stage.addEventListener("pointerdown", (event) => {
+if (event.button !== 0) return;
+stainChartViewerView.drag = { x: event.clientX - stainChartViewerView.x, y: event.clientY - stainChartViewerView.y };
+stage.classList.add("is-panning");
+stage.setPointerCapture(event.pointerId);
+});
+stage.addEventListener("pointermove", (event) => {
+if (!stainChartViewerView.drag) return;
+stainChartViewerView.x = event.clientX - stainChartViewerView.drag.x;
+stainChartViewerView.y = event.clientY - stainChartViewerView.drag.y;
+applyStainChartViewerView();
+});
+const endPan = () => {
+stainChartViewerView.drag = null;
+stage.classList.remove("is-panning");
+};
+stage.addEventListener("pointerup", endPan);
+stage.addEventListener("pointercancel", endPan);
+}
+function openStainChart(session) {
+fillStainChart(session);
+$("#stainChartDialog").showModal();
+}
+function closeStainChart() {
+closeStainChartViewer();
+const dialog = $("#stainChartDialog");
+if (dialog.open) dialog.close();
+}
+function collectStainSeries(session, image = activeImage()) {
+const stains = sessionStains(session, image);
+const lengths = [];
+const widths = [];
+const alphas = [];
+const gammas = [];
+stains.forEach((stain) => {
+lengths.push(Math.abs(stain.rx) * 2);
+widths.push(Math.abs(stain.ry) * 2);
+alphas.push(ellipseAlphaDegrees(stain));
+gammas.push(ellipseGammaDegrees(stain));
+});
+return {
+stains,
+lengths,
+widths,
+alphas,
+gammas,
+lengthStats: numericStats(lengths),
+widthStats: numericStats(widths),
+alphaStats: numericStats(alphas),
+gammaStats: numericStats(gammas),
+};
+}
+function stainChartSpecs(session, image = activeImage()) {
+const series = collectStainSeries(session, image);
+if (!series.stains.length) return [];
+const { stains, widths, alphas, gammas, widthStats, alphaStats } = series;
+const widthUnit = (pixels) => calibratedLength(pixels, image);
+const widthMax = widthStats.max === widthStats.min ? widthStats.min + 1 : widthStats.max;
+return [
+{
+title: "Impact angle",
+caption: "Alpha from width/length. Near 90° is steep; lower values are more glancing. Cyan line is the mean.",
+node: histogramSvg(alphas, { min: 0, max: 90, bins: 9, mean: alphaStats.mean, median: alphaStats.median, formatTick: (value) => `${value.toFixed(0)}°` }),
+},
+{
+title: "Stain width",
+caption: "Width is the size cue (length also includes elongation). Smaller widths often go with higher energy.",
+node: histogramSvg(widths, {
+min: widthStats.min,
+max: widthMax,
+bins: Math.min(10, Math.max(5, Math.ceil(Math.sqrt(widths.length)))),
+mean: widthStats.mean,
+median: widthStats.median,
+formatTick: (value) => widthUnit(value),
+}),
+},
+{
+title: "Travel direction",
+caption: "Gamma rose. One lobe is a common path; opposite lobes mean mixed or opposing travel.",
+node: roseSvg(gammas),
+},
+{
+title: "Width vs impact angle",
+caption: "Each stain is a point. Small-and-steep sits left and high; large-and-glancing sits right and low.",
+node: scatterSvg(widths, alphas, {
+xMin: widthStats.min,
+xMax: widthMax,
+yMin: 0,
+yMax: 90,
+formatX: (value) => widthUnit(value),
+formatY: (value) => `${value.toFixed(0)}°`,
+}),
+},
+{
+title: "Location",
+caption: "Dots on the photo. Color goes from orange (low alpha / glancing) to cyan (near 90°).",
+kind: "map",
+stains,
+node: stainLocationMap(stains, image),
+},
+];
+}
+function locationMapDataUrl(stains, image, maxEdge = 1600) {
+const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
+const width = Math.max(1, Math.round(image.width * scale));
+const height = Math.max(1, Math.round(image.height * scale));
+const canvas = document.createElement("canvas");
+canvas.width = width;
+canvas.height = height;
+const ctx = canvas.getContext("2d");
+ctx.fillStyle = "#111";
+ctx.fillRect(0, 0, width, height);
+ctx.drawImage(image.element, 0, 0, width, height);
+const size = Math.max(width, height);
+stains.forEach((stain) => {
+const t = Math.min(1, Math.max(0, ellipseAlphaDegrees(stain) / 90));
+ctx.beginPath();
+ctx.arc(stain.cx * scale, stain.cy * scale, Math.max(4, size * 0.007), 0, Math.PI * 2);
+ctx.fillStyle = `rgb(${Math.round(240 - t * 200)}, ${Math.round(154 + t * 50)}, ${Math.round(53 + t * 160)})`;
+ctx.fill();
+ctx.lineWidth = Math.max(1, size * 0.0015);
+ctx.strokeStyle = "#0b2238";
+ctx.stroke();
+});
+return canvas.toDataURL("image/jpeg", 0.88);
+}
+function chartNodeMarkup(spec, image) {
+if (spec.kind === "map") return `<img src="${locationMapDataUrl(spec.stains, image)}" alt="">`;
+const svg = spec.node.cloneNode(true);
+svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+return svg.outerHTML;
+}
+function fillStainChart(session, image = activeImage()) {
+const stains = sessionStains(session, image);
+const empty = $("#stainChartEmpty");
+const summary = $("#stainChartSummary");
+const tableWrap = $("#stainChartTableWrap");
+const body = $("#stainChartBody");
+const graphs = $("#stainChartGraphs");
+empty.hidden = stains.length > 0;
+summary.hidden = stains.length === 0;
+tableWrap.hidden = stains.length === 0;
+graphs.hidden = stains.length === 0;
+summary.innerHTML = "";
+body.innerHTML = "";
+graphs.innerHTML = "";
+if (!stains.length) return;
+const series = collectStainSeries(session, image);
+series.stains.forEach((stain, index) => {
+const length = series.lengths[index];
+const width = series.widths[index];
+const alpha = series.alphas[index];
+const gamma = series.gammas[index];
+const row = document.createElement("tr");
+row.innerHTML = `<td>${stain.stainNumber || index + 1}</td><td>${stain.source === "manual" ? "manual" : "auto"}</td><td>${calibratedLength(length, image)}</td><td>${calibratedLength(width, image)}</td><td>${alpha.toFixed(1)}°</td><td>${gamma.toFixed(1)}°</td>`;
+body.append(row);
+});
+const counts = stainSourceCounts(session, image);
+const { lengthStats, widthStats, alphaStats, gammaStats } = series;
+const items = [
+["Auto", String(counts.auto)],
+["Manual", String(counts.manual)],
+["Avg length", calibratedLength(lengthStats.mean, image)],
+["Avg width", calibratedLength(widthStats.mean, image)],
+["Avg alpha", `${alphaStats.mean.toFixed(1)}°`],
+["Avg gamma", `${gammaStats.mean.toFixed(1)}°`],
+["Min length", calibratedLength(lengthStats.min, image)],
+["Max length", calibratedLength(lengthStats.max, image)],
+["Min width", calibratedLength(widthStats.min, image)],
+["Max width", calibratedLength(widthStats.max, image)],
+["Median length", calibratedLength(lengthStats.median, image)],
+["Median width", calibratedLength(widthStats.median, image)],
+["Stdev length", calibratedLength(lengthStats.stdev, image)],
+["Stdev width", calibratedLength(widthStats.stdev, image)],
+["Density", stainDensityLabel(session, image)],
+];
+items.forEach(([label, value]) => {
+const item = document.createElement("div");
+item.innerHTML = `<span>${label}</span><strong></strong>`;
+item.querySelector("strong").textContent = value;
+summary.append(item);
+});
+stainChartSpecs(session, image).forEach((spec) => {
+graphs.append(stainChartPanel(spec.title, spec.caption, spec.node));
+});
+}
+function isSessionStain(object) {
+return Boolean(object?.sessionId && object.type === "halfEllipse");
+}
+function objectIsDrawn(object, image = activeImage()) {
+if (!object || object.visible === false) return false;
+if (object.sessionId) {
+const parent = image?.objects.find((item) => item.id === object.sessionId);
+if (parent?.visible === false) return false;
+}
+return true;
+}
 function ensureStainSession(image = activeImage()) {
 if (!image) return null;
 let session = stainSession(image);
 if (session) return session;
+recordHistory();
 session = makeObject("stainCount", {
 stainColor: null,
+stainColorLight: null,
 backgroundColor: null,
 smallSize: null,
 largeSize: null,
 detectRegion: [],
 excludeRegions: [],
-separation: 35,
-sizeTune: 20,
-fill: 40,
+direction: null,
+directionStart: null,
+directionEnd: null,
+separation: 20,
+sizeTune: 10,
+fill: 15,
+seedCenters: [],
 });
 image.objects.push(session);
 return session;
@@ -720,6 +1360,254 @@ state.stainMode = mode;
 state.draft = null;
 updateHint();
 draw();
+}
+const stainWizardSteps = [
+{
+id: "stainColor",
+title: "Sample stain color",
+copy: "Click a typical stain body — the darker, well-formed part, not the washed tail.",
+waiting: "Click the image to sample.",
+mode: "stainColor",
+required: true,
+done: (session) => Boolean(session?.stainColor),
+status: (session) => session?.stainColor,
+},
+{
+id: "stainColorLight",
+title: "Sample a lighter stain",
+copy: "Click a lighter or wetter part of a stain body — still the round body, not the tail. Skip if the stains are even in color.",
+waiting: "Click the image to sample.",
+mode: "stainColorLight",
+optional: true,
+done: (session) => Boolean(session?.stainColorLight),
+status: (session) => session?.stainColorLight,
+},
+{
+id: "backgroundColor",
+title: "Sample background",
+copy: "Click the surface next to the stains (paint, tile, drywall). Detection is “closer to stain than to this color.”",
+waiting: "Click the image to sample.",
+mode: "backgroundColor",
+required: true,
+done: (session) => Boolean(session?.backgroundColor),
+status: (session) => session?.backgroundColor,
+},
+{
+id: "smallSize",
+title: "Sample a small stain",
+copy: "Drag across one of the smaller stains you want counted. That sets the minimum size.",
+waiting: "Drag across a small stain.",
+mode: "smallSize",
+required: true,
+done: (session) => Number.isFinite(session?.smallSize),
+status: (session) => formatStainSampleSize(session?.smallSize),
+},
+{
+id: "largeSize",
+title: "Sample a large stain",
+copy: "Drag across one of the larger stains. That sets the maximum size.",
+waiting: "Drag across a large stain.",
+mode: "largeSize",
+required: true,
+done: (session) => Number.isFinite(session?.largeSize),
+status: (session) => formatStainSampleSize(session?.largeSize),
+},
+{
+id: "direction",
+title: "General Stain Direction",
+copy: "Drag in the direction the stains were traveling — toward the tails. The start of the arrow is the leading edge, where the half-ellipse should sit.",
+waiting: "Drag an arrow on the image.",
+mode: "stainDirection",
+required: true,
+done: (session) => Number.isFinite(session?.direction),
+status: (session) => formatStainDirection(session),
+},
+{
+id: "detect",
+title: "Draw the search area",
+copy: "Click around the region to search. Click the first point or right-click to close. Skip this to search the whole image.",
+waiting: "Click points around the search area.",
+mode: "detect",
+optional: true,
+done: (session) => session?.detectRegion?.length >= 3,
+status: (session) => session?.detectRegion?.length >= 3 ? "Search area set." : "",
+},
+{
+id: "exclude",
+title: "Exclude areas (optional)",
+copy: "Draw around scale bars, labels, or other objects to skip. Right-click to close. Skip if nothing needs excluding.",
+waiting: "Click points around an area to skip.",
+mode: "exclude",
+optional: true,
+done: (session) => (session?.excludeRegions || []).length > 0,
+status: (session) => {
+const count = (session?.excludeRegions || []).length;
+return count ? `${count} exclude region${count === 1 ? "" : "s"}.` : "";
+},
+},
+{
+id: "detectRun",
+title: "Assisted detect",
+copy: "This is assisted, not fully automatic. Tune the live mask, find body centers, drag a center or its travel arrow if needed, then Fit Ellipses.",
+waiting: "",
+mode: null,
+required: false,
+done: (session) => sessionStains(session).length > 0,
+},
+];
+function formatStainDirection(session) {
+if (!Number.isFinite(session?.direction)) return "";
+return `γ ${ellipseGammaDegrees({ rotation: session.direction }).toFixed(1)}°`;
+}
+function formatStainSampleSize(pixels) {
+if (!Number.isFinite(pixels)) return "";
+const units = activeImage()?.calibration?.units || "px";
+const scale = unitScale() || 1;
+return `${(pixels * scale).toFixed(2)} ${units}`;
+}
+function firstIncompleteStainStep(session) {
+const index = stainWizardSteps.findIndex((step) => step.required && !step.done(session));
+return index < 0 ? stainWizardSteps.length - 1 : index;
+}
+function openStainWizard() {
+state.stainWizardOpen = true;
+goStainWizardStep(firstIncompleteStainStep(stainSession()));
+}
+function closeStainWizard() {
+state.stainWizardOpen = false;
+const panel = $("#stainWizard");
+if (panel?.open) panel.close();
+}
+function goStainWizardStep(index) {
+state.stainWizardIndex = Math.max(0, Math.min(stainWizardSteps.length - 1, index));
+state.stainWizardOpen = true;
+state.draft = null;
+const step = stainWizardSteps[state.stainWizardIndex];
+const session = stainSession();
+state.stainMode = step.mode || (step.id === "detectRun" && (session?.seedCenters || []).length ? "centers" : null);
+renderStainWizard();
+updateHint();
+draw();
+}
+function advanceStainWizardIfDone() {
+if (!state.stainWizardOpen) return;
+const session = stainSession();
+const step = stainWizardSteps[state.stainWizardIndex];
+if (step?.done?.(session) && state.stainWizardIndex < stainWizardSteps.length - 1) goStainWizardStep(state.stainWizardIndex + 1);
+else renderStainWizard();
+}
+function renderStainWizard() {
+const panel = $("#stainWizard");
+if (!panel) return;
+if (!state.stainWizardOpen) {
+if (panel.open) panel.close();
+return;
+}
+if (!panel.open) panel.show();
+applyStainWizardPosition();
+const session = stainSession();
+const index = state.stainWizardIndex;
+const step = stainWizardSteps[index];
+const last = index === stainWizardSteps.length - 1;
+$("#stainWizardStep").textContent = `Step ${index + 1} of ${stainWizardSteps.length}`;
+$("#stainWizardTitle").textContent = step.title;
+$("#stainWizardCopy").textContent = step.copy;
+const dots = $("#stainWizardDots");
+dots.innerHTML = "";
+stainWizardSteps.forEach((item, i) => {
+const dot = document.createElement("span");
+if (i === index) dot.className = "current";
+else if (item.done(session)) dot.className = "done";
+dots.append(dot);
+});
+const status = $("#stainWizardStatus");
+status.innerHTML = "";
+if (step.status?.(session)) {
+if (step.id === "stainColor" || step.id === "stainColorLight" || step.id === "backgroundColor") status.append(swatchRow("Sampled", step.status(session)));
+else status.textContent = step.status(session);
+} else if (step.waiting && state.stainMode === step.mode) {
+status.textContent = step.waiting;
+}
+const extra = $("#stainWizardExtra");
+extra.className = "stain-wizard-extra";
+if (last && session) {
+if (extra.dataset.step !== "detectRunAssisted") {
+extra.innerHTML = "";
+extra.dataset.step = "detectRunAssisted";
+extra.append(rangeField("Color Threshold", session.separation ?? 20, (value) => session.separation = value));
+extra.append(rangeField("Size Threshold", session.sizeTune ?? 10, (value) => session.sizeTune = value));
+extra.append(rangeField("Front / fill", session.fill ?? 15, (value) => session.fill = value));
+extra.append(sessionButton("Find Centers", autoDetectStains));
+const fitBtn = sessionButton("Fit Ellipses", fitEllipsesFromCenters);
+fitBtn.dataset.fitEllipses = "1";
+extra.append(fitBtn);
+extra.append(sessionButton("Switch to Manual", () => { enterManualStains(); setTool("stainCount"); }));
+extra.append(Object.assign(document.createElement("p"), { className: "session-note", id: "stainWizardCount" }));
+}
+const fitBtn = extra.querySelector("[data-fit-ellipses]");
+if (fitBtn) fitBtn.disabled = !(session.seedCenters || []).length;
+const note = $("#stainWizardCount");
+if (note) {
+const seeds = (session.seedCenters || []).length;
+note.textContent = seeds ? `${seeds} center${seeds === 1 ? "" : "s"} · ${stainCountSummary(session)}` : stainCountSummary(session);
+}
+} else {
+extra.dataset.step = step.id;
+extra.innerHTML = "";
+}
+$("#stainWizardBack").disabled = index === 0;
+$("#stainWizardSkip").hidden = !step.optional;
+$("#stainWizardNext").textContent = last ? "Done" : "Next";
+$("#stainWizardNext").disabled = !last && step.required && !step.done(session);
+}
+function stainWizardBack() {
+goStainWizardStep(state.stainWizardIndex - 1);
+}
+function stainWizardSkip() {
+goStainWizardStep(state.stainWizardIndex + 1);
+}
+function stainWizardNext() {
+if (state.stainWizardIndex >= stainWizardSteps.length - 1) {
+closeStainWizard();
+return;
+}
+const step = stainWizardSteps[state.stainWizardIndex];
+if (step.required && !step.done(stainSession())) return;
+goStainWizardStep(state.stainWizardIndex + 1);
+}
+function applyStainWizardPosition() {
+const panel = $("#stainWizard");
+if (!panel || !state.stainWizardPos) return;
+const width = panel.offsetWidth || 300;
+const height = panel.offsetHeight || 200;
+const left = Math.max(0, Math.min(window.innerWidth - width, state.stainWizardPos.left));
+const top = Math.max(0, Math.min(window.innerHeight - height, state.stainWizardPos.top));
+state.stainWizardPos = { left, top };
+panel.style.left = `${left}px`;
+panel.style.top = `${top}px`;
+}
+function bindStainWizardDrag() {
+const panel = $("#stainWizard");
+const handle = panel?.querySelector(".stain-wizard-head");
+if (!panel || !handle) return;
+handle.addEventListener("pointerdown", (event) => {
+if (event.button !== 0 || event.target.closest("button")) return;
+const rect = panel.getBoundingClientRect();
+state.stainWizardDrag = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+handle.setPointerCapture(event.pointerId);
+});
+handle.addEventListener("pointermove", (event) => {
+if (!state.stainWizardDrag) return;
+state.stainWizardPos = {
+left: event.clientX - state.stainWizardDrag.x,
+top: event.clientY - state.stainWizardDrag.y,
+};
+applyStainWizardPosition();
+});
+const endDrag = () => { state.stainWizardDrag = null; };
+handle.addEventListener("pointerup", endDrag);
+handle.addEventListener("pointercancel", endDrag);
+window.addEventListener("resize", () => { if (state.stainWizardOpen) applyStainWizardPosition(); });
 }
 function invalidateStainMask(session) {
 if (session) stainMaskCache.delete(session.id);
@@ -778,56 +1666,106 @@ const y = Math.max(0, Math.min(image.height - 1, Math.round(point.y)));
 const i = (y * image.width + x) * 4;
 return hexFromRgb({ r: pixels.data[i], g: pixels.data[i + 1], b: pixels.data[i + 2] });
 }
+function stainSamples(session) {
+return [rgbFromHex(session.stainColor), rgbFromHex(session.stainColorLight)].filter(Boolean);
+}
+function isStainPixel(rgb, stains, background, separation) {
+const t = (Number(separation) || 0) / 100 * 0.55;
+const toBg = colorDistance(rgb, background);
+for (const stain of stains) {
+const pair = Math.max(1, colorDistance(stain, background));
+if (toBg - colorDistance(rgb, stain) > t * pair) return true;
+}
+return false;
+}
 function stainMaskKey(session) {
 return JSON.stringify({
 stainColor: session.stainColor,
+stainColorLight: session.stainColorLight,
 backgroundColor: session.backgroundColor,
 detectRegion: session.detectRegion,
 excludeRegions: session.excludeRegions,
 separation: session.separation,
+sizeTune: session.sizeTune,
+fill: session.fill,
+smallSize: session.smallSize,
+largeSize: session.largeSize,
 });
 }
 function buildStainMask(image, session) {
-const stain = rgbFromHex(session.stainColor);
+const stains = stainSamples(session);
 const background = rgbFromHex(session.backgroundColor);
-if (!stain || !background) return null;
+if (!stains.length || !background) return null;
 const key = stainMaskKey(session);
 const cached = stainMaskCache.get(session.id);
 if (cached?.key === key) return cached;
 const pixels = ensureImagePixels(image);
-const scale = Math.min(1, 900 / Math.max(image.width, image.height));
+const pixelCount = image.width * image.height;
+const maxPixels = 24_000_000;
+const scale = pixelCount > maxPixels ? Math.sqrt(maxPixels / pixelCount) : 1;
 const width = Math.max(1, Math.round(image.width * scale));
 const height = Math.max(1, Math.round(image.height * scale));
 const mask = new Uint8Array(width * height);
-const pairDist = Math.max(1, colorDistance(stain, background));
-const threshold = (Number(session.separation) || 0) / 100 * pairDist * 0.55;
+const source = pixels.data;
+const sourceWidth = image.width;
 for (let y = 0; y < height; y++) {
+const iy = scale === 1 ? y : Math.min(image.height - 1, Math.round(y / scale));
 for (let x = 0; x < width; x++) {
-const ix = Math.min(image.width - 1, Math.round(x / scale));
-const iy = Math.min(image.height - 1, Math.round(y / scale));
-const point = { x: ix, y: iy };
-if (!inDetectRegion(point, session) || inExcludeRegion(point, session)) continue;
-const i = (iy * image.width + ix) * 4;
-const rgb = { r: pixels.data[i], g: pixels.data[i + 1], b: pixels.data[i + 2] };
-if (colorDistance(rgb, background) - colorDistance(rgb, stain) > threshold) mask[y * width + x] = 1;
+const ix = scale === 1 ? x : Math.min(image.width - 1, Math.round(x / scale));
+if (!inDetectRegion({ x: ix, y: iy }, session) || inExcludeRegion({ x: ix, y: iy }, session)) continue;
+const i = (iy * sourceWidth + ix) * 4;
+const rgb = { r: source[i], g: source[i + 1], b: source[i + 2] };
+if (isStainPixel(rgb, stains, background, session.separation)) mask[y * width + x] = 1;
 }
 }
+filterStainMask(mask, width, height, scale, session);
+const overlayScale = Math.min(1, 1400 / Math.max(width, height));
+const overlayWidth = Math.max(1, Math.round(width * overlayScale));
+const overlayHeight = Math.max(1, Math.round(height * overlayScale));
 const overlay = document.createElement("canvas");
-overlay.width = width;
-overlay.height = height;
+overlay.width = overlayWidth;
+overlay.height = overlayHeight;
 const overlayCtx = overlay.getContext("2d");
-const overlayData = overlayCtx.createImageData(width, height);
-for (let i = 0; i < mask.length; i++) {
-if (!mask[i]) continue;
-overlayData.data[i * 4] = 25;
-overlayData.data[i * 4 + 1] = 201;
-overlayData.data[i * 4 + 2] = 210;
-overlayData.data[i * 4 + 3] = 90;
+const overlayData = overlayCtx.createImageData(overlayWidth, overlayHeight);
+for (let y = 0; y < overlayHeight; y++) {
+const my = overlayScale === 1 ? y : Math.min(height - 1, Math.round(y / overlayScale));
+for (let x = 0; x < overlayWidth; x++) {
+const mx = overlayScale === 1 ? x : Math.min(width - 1, Math.round(x / overlayScale));
+if (!mask[my * width + mx]) continue;
+const i = (y * overlayWidth + x) * 4;
+overlayData.data[i] = 25;
+overlayData.data[i + 1] = 201;
+overlayData.data[i + 2] = 210;
+overlayData.data[i + 3] = 90;
+}
 }
 overlayCtx.putImageData(overlayData, 0, 0);
 const result = { key, scale, width, height, mask, overlay };
 stainMaskCache.set(session.id, result);
 return result;
+}
+function blobPassesFillFilter(blob, scale, session) {
+const bw = blob.maxX - blob.minX + 1;
+const bh = blob.maxY - blob.minY + 1;
+const size = Math.max(bw, bh) / Math.max(scale, .0001);
+const large = Number(session.largeSize);
+const treatAsLarge = Number.isFinite(large) ? size > large * 0.45 : size > 48;
+if (treatAsLarge) return true;
+const minSolidity = 0.06 + (Number(session.fill) || 0) / 100 * 0.4;
+return blob.area / Math.max(1, bw * bh) >= minSolidity;
+}
+function filterStainMask(mask, width, height, scale, session) {
+const band = stainSizeBand(session);
+const blobs = connectedComponents(mask, width, height);
+mask.fill(0);
+for (const blob of blobs) {
+const bw = blob.maxX - blob.minX + 1;
+const bh = blob.maxY - blob.minY + 1;
+if (!blobPassesFillFilter(blob, scale, session)) continue;
+const size = Math.max(bw, bh) / Math.max(scale, .0001);
+if (size < band.min || size > band.max) continue;
+for (const point of blob.pixels) mask[point.y * width + point.x] = 1;
+}
 }
 function drawStainMask(drawCtx, image) {
 const session = stainSession(image);
@@ -838,6 +1776,53 @@ drawCtx.save();
 drawCtx.imageSmoothingEnabled = false;
 drawCtx.drawImage(built.overlay, 0, 0, image.width, image.height);
 drawCtx.restore();
+}
+function drawSeedCenters(drawCtx, image, zoom) {
+const session = stainSession(image);
+const seeds = session?.seedCenters || [];
+if (!seeds.length) return;
+const hasDir = Number.isFinite(session.direction);
+seeds.forEach((seed) => {
+const selected = seed.id === state.selectedSeedId;
+const radius = (selected ? 6 : 5) / zoom;
+if (hasDir) {
+const angle = seedTravelAngle(seed, session);
+const start = (radius + 1.5 / zoom);
+const length = 66 / zoom;
+const tipX = seed.x + Math.cos(angle) * length;
+const tipY = seed.y + Math.sin(angle) * length;
+drawCtx.beginPath();
+drawCtx.moveTo(seed.x + Math.cos(angle) * start, seed.y + Math.sin(angle) * start);
+drawCtx.lineTo(tipX, tipY);
+const head = 6 / zoom;
+drawCtx.lineTo(tipX + Math.cos(angle + 2.6) * head, tipY + Math.sin(angle + 2.6) * head);
+drawCtx.moveTo(tipX, tipY);
+drawCtx.lineTo(tipX + Math.cos(angle - 2.6) * head, tipY + Math.sin(angle - 2.6) * head);
+drawCtx.lineWidth = (selected ? 2 : 1.5) / zoom;
+drawCtx.strokeStyle = "#f09a35";
+drawCtx.stroke();
+drawCtx.beginPath();
+drawCtx.arc(tipX, tipY, (selected ? 4.5 : 3.5) / zoom, 0, Math.PI * 2);
+drawCtx.fillStyle = selected ? "#f09a35" : "#0b2238";
+drawCtx.fill();
+drawCtx.lineWidth = 1.2 / zoom;
+drawCtx.strokeStyle = selected ? "#0b2238" : "#f09a35";
+drawCtx.stroke();
+}
+drawCtx.beginPath();
+drawCtx.arc(seed.x, seed.y, radius, 0, Math.PI * 2);
+drawCtx.fillStyle = "#f09a35";
+drawCtx.fill();
+drawCtx.lineWidth = 1.5 / zoom;
+drawCtx.strokeStyle = "#0b2238";
+drawCtx.stroke();
+drawCtx.beginPath();
+drawCtx.moveTo(seed.x - 3 / zoom, seed.y);
+drawCtx.lineTo(seed.x + 3 / zoom, seed.y);
+drawCtx.moveTo(seed.x, seed.y - 3 / zoom);
+drawCtx.lineTo(seed.x, seed.y + 3 / zoom);
+drawCtx.stroke();
+});
 }
 function connectedComponents(mask, width, height) {
 const seen = new Uint8Array(mask.length);
@@ -858,7 +1843,7 @@ minX = Math.min(minX, x);
 maxX = Math.max(maxX, x);
 minY = Math.min(minY, y);
 maxY = Math.max(maxY, y);
-for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1], [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]]) {
 if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
 const neighbor = ny * width + nx;
 if (!mask[neighbor] || seen[neighbor]) continue;
@@ -870,9 +1855,9 @@ blobs.push({ pixels, minX, minY, maxX, maxY, area: pixels.length });
 }
 return blobs;
 }
-function fitHalfLength(pixels) {
+function fitHalfLength(pixels, preferredAngle) {
 const n = pixels.length;
-if (n < 12) return null;
+if (n < 6) return null;
 let mx = 0, my = 0;
 for (const p of pixels) { mx += p.x; my += p.y; }
 mx /= n;
@@ -894,9 +1879,9 @@ tMin = Math.min(tMin, t);
 tMax = Math.max(tMax, t);
 }
 const span = tMax - tMin;
-if (span < 4) return null;
-const step = Math.max(1, span / 36);
-const band = Math.max(1.2, step * 0.9);
+if (span < 3) return null;
+const step = Math.max(0.75, span / 36);
+const band = Math.max(1, step * 0.9);
 const widthAt = (t0) => {
 let sMin = Infinity, sMax = -Infinity, count = 0;
 for (const p of pixels) {
@@ -907,62 +1892,499 @@ sMin = Math.min(sMin, s);
 sMax = Math.max(sMax, s);
 count++;
 }
-return count < 3 ? 0 : sMax - sMin;
+return count < 2 ? 0 : sMax - sMin;
 };
 const wStart = widthAt(tMin + step);
 const wEnd = widthAt(tMax - step);
-if (!wStart && !wEnd) return null;
-const tipIsMin = wStart <= wEnd;
+let tipIsMin = wStart >= wEnd;
+if (Number.isFinite(preferredAngle)) {
+const align = ux * Math.cos(preferredAngle) + uy * Math.sin(preferredAngle);
+tipIsMin = align > 0;
+}
 const tTip = tipIsMin ? tMin : tMax;
 const tBack = tipIsMin ? tMax : tMin;
-const dir = tipIsMin ? 1 : -1;
+const walk = tipIsMin ? 1 : -1;
 const profile = [];
-for (let t = tTip; dir > 0 ? t <= tBack : t >= tBack; t += dir * step) profile.push({ t, w: widthAt(t) });
-if (profile.length < 6) return null;
+for (let t = tTip; walk > 0 ? t <= tBack : t >= tBack; t += walk * step) profile.push({ t, w: widthAt(t) });
+if (profile.length < 4) {
+profile.length = 0;
+profile.push({ t: tTip, w: widthAt(tTip) }, { t: (tTip + tBack) / 2, w: widthAt((tTip + tBack) / 2) }, { t: tBack, w: widthAt(tBack) });
+}
 const smooth = profile.map((item, i) => {
 const prev = profile[Math.max(0, i - 1)].w;
 const next = profile[Math.min(profile.length - 1, i + 1)].w;
 return { t: item.t, w: (prev + item.w + next) / 3 };
 });
-const start = Math.max(2, Math.floor(smooth.length * 0.1));
-const limit = Math.floor(smooth.length * 0.7);
-let peak = -1;
-for (let i = start; i < limit - 1; i++) {
-if (smooth[i].w >= smooth[i - 1].w && smooth[i].w >= smooth[i + 1].w && smooth[i].w > smooth[start].w * 1.12) {
-peak = i;
-break;
+const start = Math.min(smooth.length - 2, Math.max(1, Math.floor(smooth.length * 0.06)));
+let peak = start;
+let risen = false;
+for (let i = start; i < smooth.length - 1; i++) {
+if (smooth[i].w > smooth[peak].w) peak = i;
+if (smooth[i].w > smooth[start].w * 1.08) risen = true;
+if (risen && i > peak && smooth[i].w < smooth[peak].w * 0.88) break;
 }
+let halfLen = Math.abs(smooth[peak].t - tTip);
+let width = Math.max(smooth[peak].w, 1);
+if (halfLen < 2) {
+peak = Math.min(smooth.length - 1, Math.max(start, Math.floor(smooth.length * 0.35)));
+halfLen = Math.max(2, Math.abs(smooth[peak].t - tTip));
+width = Math.max(width, smooth[peak].w, 1);
 }
-if (peak < 0) {
-let best = start;
-for (let i = start; i < limit; i++) if (smooth[i].w > smooth[best].w) best = i;
-if (smooth[best].w <= smooth[start].w * 1.08) return null;
-peak = best;
-}
-const halfLen = Math.abs(smooth[peak].t - tTip);
-const width = smooth[peak].w;
-if (halfLen < 2 || width < 1.5) return null;
-const ratio = width / (halfLen * 2);
-if (ratio < 0.12 || ratio > 0.95) return null;
+let rx = halfLen;
+let ry = width / 2;
+if (ry > rx) ry = rx;
+if (ry < rx * 0.06) ry = rx * 0.06;
 const tip = { x: mx + tTip * ux, y: my + tTip * uy };
 const equator = { x: mx + smooth[peak].t * ux, y: my + smooth[peak].t * uy };
-const center = midpoint(tip, equator);
 return {
-cx: center.x,
-cy: center.y,
-rx: Math.max(1, halfLen),
-ry: Math.max(1, width / 2),
-rotation: Math.atan2(tip.y - center.y, tip.x - center.x),
+cx: equator.x,
+cy: equator.y,
+rx: Math.max(1, rx),
+ry: Math.max(1, ry),
+rotation: Math.atan2(tip.y - equator.y, tip.x - equator.x),
 };
+}
+function clampHalfEllipse(geometry) {
+const rx = Math.max(2, geometry.rx);
+let ry = Math.max(1, geometry.ry);
+if (ry > rx) ry = rx;
+if (ry < rx * 0.06) ry = rx * 0.06;
+return { ...geometry, rx, ry };
+}
+function halfEllipseScore(geometry, pixels, blobSet, tailPixels = []) {
+const rx = Math.max(geometry.rx, 1);
+const ry = Math.max(geometry.ry, 1);
+let insideBlob = 0, missedFront = 0;
+for (const point of pixels) {
+const local = ellipseLocalPoint(geometry, point);
+if (local.x < -0.5) continue;
+const r = (local.x / rx) ** 2 + (local.y / ry) ** 2;
+if (r <= 1) insideBlob += 1;
+else missedFront += 1;
+}
+let coveredTail = 0;
+for (const point of tailPixels) {
+const local = ellipseLocalPoint(geometry, point);
+if (local.x < 0) continue;
+if ((local.x / rx) ** 2 + (local.y / ry) ** 2 <= 1) coveredTail += 1;
+}
+let insideEmpty = 0;
+const reach = Math.max(rx, ry) + 2;
+const step = Math.max(1, Math.round(Math.min(rx, ry) / 8));
+for (let y = Math.floor(geometry.cy - reach); y <= geometry.cy + reach; y += step) {
+for (let x = Math.floor(geometry.cx - reach); x <= geometry.cx + reach; x += step) {
+if (blobSet.has(`${x},${y}`)) continue;
+const local = ellipseLocalPoint(geometry, { x, y });
+if (local.x < 0) continue;
+if ((local.x / rx) ** 2 + (local.y / ry) ** 2 <= 1) insideEmpty += 1;
+}
+}
+return insideBlob / Math.max(1, insideBlob + insideEmpty + missedFront + coveredTail * 1.4);
+}
+function refineHalfEllipse(geometry, pixels, options = {}) {
+if (!pixels?.length) return geometry;
+const blobSet = new Set(pixels.map((point) => `${Math.round(point.x)},${Math.round(point.y)}`));
+let best = clampHalfEllipse({ ...geometry });
+const origin = { cx: best.cx, cy: best.cy, rx: best.rx, ry: best.ry, rotation: best.rotation || 0 };
+const fromCenter = Boolean(options.fromCenter);
+const tailPixels = options.tailPixels || [];
+const maxAlong = fromCenter ? origin.rx * 0.15 : Infinity;
+const maxAcross = fromCenter ? origin.ry * 0.15 : Infinity;
+const minRx = fromCenter ? origin.rx * 0.85 : 0;
+const minRy = fromCenter ? origin.ry * 0.85 : 0;
+const withinCenterBudget = (next) => {
+const axisX = Math.cos(origin.rotation);
+const axisY = Math.sin(origin.rotation);
+const dx = next.cx - origin.cx;
+const dy = next.cy - origin.cy;
+const along = dx * axisX + dy * axisY;
+const across = dx * -axisY + dy * axisX;
+return Math.abs(along) <= maxAlong + 1e-6 && Math.abs(across) <= maxAcross + 1e-6;
+};
+let bestScore = halfEllipseScore(best, pixels, blobSet, tailPixels);
+let step = Math.max(1.2, Math.min(best.rx, best.ry) * (fromCenter ? 0.18 : 0.12));
+let angleStep = 0.06;
+for (let pass = 0; pass < 12; pass++) {
+let improved = false;
+const axisX = Math.cos(best.rotation || 0);
+const axisY = Math.sin(best.rotation || 0);
+const trials = [
+{ rx: best.rx + step },
+{ rx: Math.max(minRx, best.rx - step) },
+{ ry: best.ry + step },
+{ ry: Math.max(minRy, best.ry - step) },
+{ rotation: (best.rotation || 0) + angleStep },
+{ rotation: (best.rotation || 0) - angleStep },
+{ cx: best.cx + axisX * step, cy: best.cy + axisY * step },
+{ cx: best.cx - axisX * step, cy: best.cy - axisY * step },
+{ cx: best.cx - axisY * step, cy: best.cy + axisX * step },
+{ cx: best.cx + axisY * step, cy: best.cy - axisX * step },
+];
+if (options.lockCenter && !fromCenter) trials.splice(6);
+for (const change of trials) {
+const next = clampHalfEllipse({ ...best, ...change });
+if (next.rx < minRx - 1e-6 || next.ry < minRy - 1e-6) continue;
+if (!withinCenterBudget(next)) continue;
+const score = halfEllipseScore(next, pixels, blobSet, tailPixels);
+if (score > bestScore + 1e-4) {
+best = next;
+bestScore = score;
+improved = true;
+}
+}
+if (!improved) {
+step *= 0.55;
+angleStep *= 0.55;
+if (step < 0.35) break;
+}
+}
+return best;
+}
+function blobPixelsAt(built, x, y) {
+if (!built) return null;
+const sx = Math.max(0, Math.min(built.width - 1, Math.round(x * built.scale)));
+const sy = Math.max(0, Math.min(built.height - 1, Math.round(y * built.scale)));
+if (!built.mask[sy * built.width + sx]) return null;
+const blobs = connectedComponents(built.mask, built.width, built.height);
+const blob = blobs.find((item) => item.pixels.some((point) => point.x === sx && point.y === sy));
+if (!blob) return null;
+return blob.pixels.map((point) => ({ x: point.x / built.scale, y: point.y / built.scale }));
 }
 function stainSizeBand(session) {
 let small = Number(session.smallSize);
 let large = Number(session.largeSize);
-if (!Number.isFinite(small) || !Number.isFinite(large)) return { min: 4, max: 400 };
+if (!Number.isFinite(small) || !Number.isFinite(large)) return { min: 3, max: 800 };
 if (small > large) [small, large] = [large, small];
-const half = Math.max(1, (large - small) / 2);
-const shrink = (Number(session.sizeTune) || 0) / 100 * half * 0.85;
-return { min: Math.max(2, small + shrink), max: Math.max(small + 1, large - shrink) };
+const t = (Number(session.sizeTune) || 0) / 100;
+const min = Math.max(2, small - (1 - t) * Math.max(small * 0.9, 20));
+const max = large + (1 - t) * Math.max(large * 0.8, 40);
+return { min, max };
+}
+function blobBodyPeak(pixels, direction) {
+if (!pixels?.length) return null;
+if (!Number.isFinite(direction) || pixels.length < 12) return blobInteriorPeak(pixels);
+const ux = -Math.cos(direction);
+const uy = -Math.sin(direction);
+const vx = -uy, vy = ux;
+let tMin = Infinity, tMax = -Infinity;
+const ts = new Float64Array(pixels.length);
+for (let i = 0; i < pixels.length; i++) {
+const t = pixels[i].x * ux + pixels[i].y * uy;
+ts[i] = t;
+tMin = Math.min(tMin, t);
+tMax = Math.max(tMax, t);
+}
+const span = tMax - tMin;
+if (span < 4) return blobInteriorPeak(pixels);
+const bins = Math.min(36, Math.max(8, Math.round(span / 2)));
+const mins = new Array(bins).fill(Infinity);
+const maxs = new Array(bins).fill(-Infinity);
+const binOf = new Int16Array(pixels.length);
+for (let i = 0; i < pixels.length; i++) {
+const bin = Math.min(bins - 1, Math.max(0, Math.floor((ts[i] - tMin) / span * bins)));
+binOf[i] = bin;
+const s = pixels[i].x * vx + pixels[i].y * vy;
+mins[bin] = Math.min(mins[bin], s);
+maxs[bin] = Math.max(maxs[bin], s);
+}
+const tailEnd = Math.floor(bins * 0.3);
+let bestW = 0;
+for (let b = tailEnd; b < bins; b++) {
+const w = Number.isFinite(mins[b]) ? maxs[b] - mins[b] : 0;
+if (w > bestW) bestW = w;
+}
+const keep = new Array(bins).fill(false);
+const floorW = bestW * 0.88;
+for (let b = tailEnd; b < bins; b++) {
+const w = Number.isFinite(mins[b]) ? maxs[b] - mins[b] : 0;
+if (w >= floorW) keep[b] = true;
+}
+const body = [];
+for (let i = 0; i < pixels.length; i++) {
+if (keep[binOf[i]]) body.push(pixels[i]);
+}
+const region = body.length ? body : pixels;
+if (region.length < 8) return blobInteriorPeak(region);
+let cx = 0, cy = 0;
+for (const point of region) {
+cx += point.x;
+cy += point.y;
+}
+return { x: cx / region.length, y: cy / region.length };
+}
+function blobInteriorPeak(pixels) {
+if (!pixels?.length) return null;
+let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+const set = new Set();
+for (const point of pixels) {
+set.add(`${point.x},${point.y}`);
+minX = Math.min(minX, point.x);
+minY = Math.min(minY, point.y);
+maxX = Math.max(maxX, point.x);
+maxY = Math.max(maxY, point.y);
+}
+const ox = minX - 1;
+const oy = minY - 1;
+const width = maxX - minX + 3;
+const height = maxY - minY + 3;
+const dist = new Int16Array(width * height);
+dist.fill(32767);
+const queue = [];
+for (let y = 0; y < height; y++) {
+for (let x = 0; x < width; x++) {
+if (set.has(`${x + ox},${y + oy}`)) continue;
+dist[y * width + x] = 0;
+queue.push(y * width + x);
+}
+}
+for (let i = 0; i < queue.length; i++) {
+const index = queue[i];
+const x = index % width;
+const y = (index - x) / width;
+const next = dist[index] + 1;
+for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+const neighbor = ny * width + nx;
+if (dist[neighbor] <= next) continue;
+dist[neighbor] = next;
+queue.push(neighbor);
+}
+}
+let best = pixels[0], bestDist = -1;
+for (const point of pixels) {
+const value = dist[(point.y - oy) * width + (point.x - ox)];
+if (value > bestDist) {
+bestDist = value;
+best = point;
+}
+}
+return best;
+}
+function sessionSeeds(session) {
+if (!session) return [];
+if (!session.seedCenters) session.seedCenters = [];
+return session.seedCenters;
+}
+function seedTravelAngle(seed, session = stainSession()) {
+if (Number.isFinite(seed?.direction)) return seed.direction;
+return Number.isFinite(session?.direction) ? session.direction : 0;
+}
+function seedVectorTip(seed, session, zoom) {
+const angle = seedTravelAngle(seed, session);
+const length = 66 / zoom;
+return { x: seed.x + Math.cos(angle) * length, y: seed.y + Math.sin(angle) * length };
+}
+function hitSeedVectorTip(point, image = activeImage()) {
+const session = stainSession(image);
+if (!session || !Number.isFinite(session.direction) || !image) return null;
+const zoom = image.view.zoom;
+const threshold = 10 / zoom;
+let best = null, bestDist = threshold;
+for (const seed of sessionSeeds(session)) {
+const d = distance(point, seedVectorTip(seed, session, zoom));
+if (d <= bestDist) {
+best = seed;
+bestDist = d;
+}
+}
+return best;
+}
+function hitSeedAt(point, image = activeImage()) {
+const session = stainSession(image);
+const seeds = sessionSeeds(session);
+if (!seeds.length || !image) return null;
+const threshold = 10 / image.view.zoom;
+let best = null, bestDist = threshold;
+for (const seed of seeds) {
+const d = distance(point, seed);
+if (d <= bestDist) {
+best = seed;
+bestDist = d;
+}
+}
+return best;
+}
+function blobHasSeed(blob, seeds, scale) {
+for (const seed of seeds) {
+const sx = Math.round(seed.x * scale);
+const sy = Math.round(seed.y * scale);
+if (blob.pixels.some((point) => point.x === sx && point.y === sy)) return seed;
+}
+return null;
+}
+function addCenterFromClick(point, image) {
+const session = ensureStainSession(image);
+const built = buildStainMask(image, session);
+if (built) {
+const blobs = connectedComponents(built.mask, built.width, built.height);
+const blob = blobAtPoint(blobs, point.x, point.y, built.scale);
+if (blob) {
+const existing = blobHasSeed(blob, sessionSeeds(session), built.scale);
+if (existing) {
+state.selectedSeedId = existing.id;
+return existing;
+}
+const peak = blobBodyPeak(blob.pixels, session.direction);
+return addSeedCenter({ x: peak.x / built.scale, y: peak.y / built.scale }, "manual");
+}
+}
+return addSeedCenter(point, "manual");
+}
+function addSeedCenter(point, source = "manual") {
+recordHistory();
+const session = ensureStainSession();
+const seeds = sessionSeeds(session);
+const seed = { id: uid("seed"), x: point.x, y: point.y, source, direction: stainSession()?.direction };
+seeds.push(seed);
+state.selectedSeedId = seed.id;
+return seed;
+}
+function removeSeedCenter(seed) {
+const session = stainSession();
+if (!session || !seed) return;
+recordHistory();
+session.seedCenters = sessionSeeds(session).filter((item) => item.id !== seed.id);
+if (state.selectedSeedId === seed.id) state.selectedSeedId = null;
+refreshUI();
+}
+function enterCenterReview(count) {
+state.stainMode = "centers";
+state.draft = null;
+state.selectedObjectId = stainSession()?.id || state.selectedObjectId;
+updateHint(count ? "Drag a center to place it. Drag the arrow tip to set travel toward the tail. Click a cyan stain to add a center. Right-click or Delete to remove." : "No centers yet. Click a cyan stain to add a center on the round body, then Fit Ellipses.");
+refreshUI();
+}
+function localMaskPixels(built, x, y, radius = 28) {
+if (!built) return [];
+const r = Math.max(4, radius * built.scale);
+const sx = x * built.scale;
+const sy = y * built.scale;
+const pixels = [];
+const minX = Math.max(0, Math.floor(sx - r));
+const maxX = Math.min(built.width - 1, Math.ceil(sx + r));
+const minY = Math.max(0, Math.floor(sy - r));
+const maxY = Math.min(built.height - 1, Math.ceil(sy + r));
+const r2 = r * r;
+for (let py = minY; py <= maxY; py++) {
+for (let px = minX; px <= maxX; px++) {
+if (!built.mask[py * built.width + px]) continue;
+const dx = px - sx, dy = py - sy;
+if (dx * dx + dy * dy > r2) continue;
+pixels.push({ x: px / built.scale, y: py / built.scale });
+}
+}
+return pixels;
+}
+function blobAtPoint(blobs, x, y, scale) {
+const sx = Math.round(x * scale);
+const sy = Math.round(y * scale);
+return blobs.find((blob) => blob.pixels.some((point) => point.x === sx && point.y === sy)) || null;
+}
+function nearestBlob(blobs, x, y, scale) {
+let best = null, bestDist = Infinity;
+for (const blob of blobs) {
+let mx = 0, my = 0;
+for (const point of blob.pixels) { mx += point.x; my += point.y; }
+mx = mx / blob.pixels.length / scale;
+my = my / blob.pixels.length / scale;
+const d = Math.hypot(mx - x, my - y);
+if (d < bestDist) {
+best = blob;
+bestDist = d;
+}
+}
+return bestDist < 80 ? best : null;
+}
+function pixelsForSeed(seed, built, blobs) {
+const hit = blobAtPoint(blobs, seed.x, seed.y, built.scale)
+|| nearestBlob(blobs, seed.x, seed.y, built.scale);
+if (hit) return hit.pixels.map((point) => ({ x: point.x / built.scale, y: point.y / built.scale }));
+return localMaskPixels(built, seed.x, seed.y);
+}
+function leadingAxisFromCenter(cx, cy, pixels, preferredAngle) {
+if (Number.isFinite(preferredAngle)) {
+return { ux: -Math.cos(preferredAngle), uy: -Math.sin(preferredAngle) };
+}
+if (pixels.length < 6) return { ux: 1, uy: 0 };
+let mx = 0, my = 0;
+for (const point of pixels) { mx += point.x; my += point.y; }
+mx /= pixels.length;
+my /= pixels.length;
+let xx = 0, xy = 0, yy = 0;
+for (const point of pixels) {
+const dx = point.x - mx, dy = point.y - my;
+xx += dx * dx;
+xy += dx * dy;
+yy += dy * dy;
+}
+const theta = 0.5 * Math.atan2(2 * xy, xx - yy || 1e-9);
+let ux = Math.cos(theta);
+let uy = Math.sin(theta);
+const widthToward = (dir) => {
+let min = Infinity, max = -Infinity;
+for (const point of pixels) {
+const t = (point.x - cx) * ux + (point.y - cy) * uy;
+if (t * dir < 0) continue;
+const s = (point.x - cx) * -uy + (point.y - cy) * ux;
+min = Math.min(min, s);
+max = Math.max(max, s);
+}
+return Number.isFinite(min) ? max - min : 0;
+};
+if (widthToward(1) < widthToward(-1)) {
+ux = -ux;
+uy = -uy;
+}
+return { ux, uy };
+}
+function bodyAndTailPixels(cx, cy, pixels, ux, uy) {
+const body = [];
+const tail = [];
+for (const point of pixels) {
+const t = (point.x - cx) * ux + (point.y - cy) * uy;
+if (t >= -1.5) body.push(point);
+else tail.push(point);
+}
+return { body: body.length ? body : pixels, tail };
+}
+function extentPercentile(values, fraction) {
+if (!values.length) return 0;
+const sorted = values.slice().sort((a, b) => a - b);
+const index = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * fraction)));
+return sorted[index];
+}
+function fitHalfFromCenter(cx, cy, pixels, preferredAngle, session) {
+const { ux, uy } = leadingAxisFromCenter(cx, cy, pixels, preferredAngle);
+const vx = -uy, vy = ux;
+const { body, tail } = bodyAndTailPixels(cx, cy, pixels, ux, uy);
+const extents = [];
+for (const point of body) {
+const t = (point.x - cx) * ux + (point.y - cy) * uy;
+if (t > 0) extents.push(t);
+}
+let rx = extentPercentile(extents, 0.97);
+if (rx < 2) {
+const small = Number(session?.smallSize);
+const large = Number(session?.largeSize);
+rx = Number.isFinite(small) && Number.isFinite(large) ? Math.max(2, (small + large) / 8) : 8;
+}
+const widths = [];
+for (const point of body) {
+const t = (point.x - cx) * ux + (point.y - cy) * uy;
+if (t < -1 || t > rx * 0.75) continue;
+widths.push((point.x - cx) * vx + (point.y - cy) * vy);
+}
+let sMin = 0, sMax = 0;
+if (widths.length) {
+sMin = extentPercentile(widths, 0.04);
+sMax = extentPercentile(widths, 0.96);
+}
+const ry = Math.max(1, (sMax - sMin) / 2 || rx * 0.4);
+return {
+geometry: clampHalfEllipse({ cx, cy, rx, ry, rotation: Math.atan2(uy, ux) }),
+body,
+tail,
+};
 }
 function autoDetectStains() {
 const image = activeImage();
@@ -972,47 +2394,85 @@ if (!session.stainColor || !session.backgroundColor) {
 updateHint("Sample a stain color and a background color first.");
 return;
 }
+recordHistory();
 const built = buildStainMask(image, session);
 if (!built) return;
-const band = stainSizeBand(session);
-const minSolidity = 0.18 + (Number(session.fill) || 0) / 100 * 0.55;
 const blobs = connectedComponents(built.mask, built.width, built.height);
-const kept = [];
+const seeds = [];
 for (const blob of blobs) {
-const bw = blob.maxX - blob.minX + 1;
-const bh = blob.maxY - blob.minY + 1;
-if (blob.area / Math.max(1, bw * bh) < minSolidity) continue;
-const fit = fitHalfLength(blob.pixels.map((p) => ({ x: p.x / built.scale, y: p.y / built.scale })));
-if (!fit) continue;
-const size = Math.max(fit.rx * 2, fit.ry * 2);
-if (size < band.min || size > band.max) continue;
-kept.push(fit);
+if (blob.area < 6) continue;
+if (!blobPassesFillFilter(blob, built.scale, session)) continue;
+const peak = blobBodyPeak(blob.pixels, session.direction);
+seeds.push({
+id: uid("seed"),
+x: peak.x / built.scale,
+y: peak.y / built.scale,
+source: "auto",
+direction: session.direction,
+});
 }
-image.objects = image.objects.filter((object) => !(object.sessionId === session.id && object.source === "auto"));
-for (const geometry of kept) addStain(session, geometry, "auto");
+session.seedCenters = seeds;
+state.selectedSeedId = seeds[0]?.id || null;
+image.objects = image.objects.filter((object) => !(object.sessionId === session.id && (object.source === "auto" || object.fromSeed)));
+enterCenterReview(seeds.length);
+}
+function fitEllipsesFromCenters() {
+const image = activeImage();
+const session = stainSession(image);
+const seeds = sessionSeeds(session);
+if (!image || !session || !seeds.length) {
+updateHint("No centers yet");
+return;
+}
+recordHistory();
+const built = buildStainMask(image, session);
+if (!built) return;
+const blobs = connectedComponents(built.mask, built.width, built.height);
+image.objects = image.objects.filter((object) => !(object.sessionId === session.id && (object.source === "auto" || object.fromSeed)));
+for (const seed of seeds) {
+const pixels = pixelsForSeed(seed, built, blobs);
+const fitted = fitHalfFromCenter(seed.x, seed.y, pixels, seedTravelAngle(seed, session), session);
+const next = fitted.body.length
+? refineHalfEllipse(fitted.geometry, fitted.body, { fromCenter: true, tailPixels: fitted.tail })
+: fitted.geometry;
+addStain(session, next, seed.source === "manual" ? "manual" : "auto", { fromSeed: true });
+}
 renumberStains(session);
-state.selectedObjectId = session.id;
 state.stainMode = null;
-updateHint(kept.length ? `Detected ${kept.length} stain${kept.length === 1 ? "" : "s"}.` : "No stains matched the samples. Adjust sliders or mark stains by hand.");
+state.selectedSeedId = null;
+state.selectedObjectId = session.id;
+updateHint(`Fitted ${seeds.length} ellipse${seeds.length === 1 ? "" : "s"} from centers.`);
 refreshUI();
 }
-function addStain(session, geometry, source) {
+function addStain(session, geometry, source, extra = {}) {
 const image = activeImage();
 const object = normalizeEllipse(makeObject("halfEllipse", {
 ...geometry,
 showPoints: false,
 sessionId: session.id,
 source,
+fromSeed: Boolean(extra.fromSeed),
 stainNumber: 0,
 }));
 image.objects.push(object);
 return object;
 }
 function completeManualStain(geometry) {
+recordHistory();
 const session = ensureStainSession();
-addStain(session, geometry, "manual");
+const image = activeImage();
+let next = geometry;
+const built = image ? buildStainMask(image, session) : null;
+if (built) {
+const tip = rotateEllipsePoint(geometry, geometry.rx, 0);
+const pixels = blobPixelsAt(built, geometry.cx, geometry.cy) || blobPixelsAt(built, tip.x, tip.y);
+if (pixels?.length) next = refineHalfEllipse(geometry, pixels);
+}
+const stain = addStain(session, next, "manual");
 renumberStains(session);
 state.draft = null;
+state.selectedObjectId = stain.id;
+if (state.stainVariant === "manual") state.stainMode = "manual";
 refreshUI();
 }
 function renumberStains(session, image = activeImage()) {
@@ -1030,31 +2490,40 @@ state.draft = null;
 draw();
 return;
 }
+recordHistory();
 if (state.draft.type === "stainDetect") session.detectRegion = points;
 if (state.draft.type === "stainExclude") session.excludeRegions = [...(session.excludeRegions || []), points];
 invalidateStainMask(session);
 state.draft = null;
 state.stainMode = null;
 refreshUI();
+advanceStainWizardIfDone();
 }
 function handleStainPointerDown(event, point, image) {
 const mode = state.stainMode;
 if (!mode) return false;
-if (mode === "stainColor" || mode === "backgroundColor") {
+if (mode === "stainColor" || mode === "stainColorLight" || mode === "backgroundColor") {
+recordHistory();
 const session = ensureStainSession();
 session[mode] = sampleImageColor(image, point);
 invalidateStainMask(session);
 state.stainMode = null;
-updateHint(mode === "stainColor" ? "Stain color sampled." : "Background color sampled.");
+updateHint(mode === "backgroundColor" ? "Background color sampled." : mode === "stainColorLight" ? "Lighter stain color sampled." : "Stain color sampled.");
 refreshUI();
+advanceStainWizardIfDone();
 return true;
 }
-if (mode === "smallSize" || mode === "largeSize") {
-state.draft = { type: "stainSample", mode, start: point, current: point };
+if (mode === "smallSize" || mode === "largeSize" || mode === "stainDirection") {
+state.draft = { type: mode === "stainDirection" ? "stainDirection" : "stainSample", mode, start: point, current: point };
 canvas.setPointerCapture(event.pointerId);
 return true;
 }
 if (mode === "manual") {
+const existing = hitStainAt(point);
+if (existing) {
+selectStain(existing);
+return true;
+}
 state.draft = { type: "halfEllipse", start: point, current: point, stainManual: true };
 canvas.setPointerCapture(event.pointerId);
 return true;
@@ -1089,7 +2558,23 @@ if (state.draft?.type === "stainDetect" || state.draft?.type === "stainExclude")
 finishStainPolygon();
 return;
 }
-if (state.tool === "stainCount" && state.stainMode === "manual") {
+const sampling = ["stainColor", "stainColorLight", "backgroundColor", "smallSize", "largeSize", "stainDirection", "detect", "exclude"].includes(state.stainMode || "");
+if (!sampling) {
+if (state.stainMode === "centers") {
+const point = imagePoint(event);
+const seed = hitSeedAt(point) || hitSeedVectorTip(point);
+if (seed) {
+removeSeedCenter(seed);
+return;
+}
+}
+const stain = hitStainAt(imagePoint(event));
+if (stain) {
+deleteStain(stain);
+return;
+}
+}
+if (state.tool === "stainCount" && state.stainMode === "manual" && state.stainVariant !== "manual") {
 state.stainMode = null;
 state.draft = null;
 updateHint();
@@ -1102,12 +2587,54 @@ return;
 }
 if (event.button !== 0) return;
 const point = imagePoint(event);
+if (state.stainMode === "centers") {
+const tip = hitSeedVectorTip(point, image);
+if (tip) {
+recordHistory();
+state.selectedSeedId = tip.id;
+state.dragging = { mode: "seed-direction", seed: tip };
+canvas.setPointerCapture(event.pointerId);
+draw();
+return;
+}
+const seed = hitSeedAt(point);
+if (seed) {
+recordHistory();
+state.selectedSeedId = seed.id;
+state.dragging = { mode: "seed", seed, start: point, origin: { x: seed.x, y: seed.y } };
+canvas.setPointerCapture(event.pointerId);
+draw();
+return;
+}
+addCenterFromClick(point, image);
+refreshUI();
+return;
+}
+if (!["stainColor", "stainColorLight", "backgroundColor", "smallSize", "largeSize", "stainDirection", "detect", "exclude"].includes(state.stainMode || "")) {
+const current = selectedObject();
+const control = isEllipseLike(current?.type) && !current.locked ? hitEllipseControl(current, point, image.view.zoom) : null;
+if (control) {
+if (!selectingStainKeepsTool()) setTool("select");
+recordHistory();
+state.dragging = { mode: "ellipse-control", role: control.role, object: current, start: point, snapshot: JSON.parse(JSON.stringify(current)) };
+canvas.setPointerCapture(event.pointerId);
+return;
+}
+const stain = hitStainAt(point);
+if (stain) {
+const already = stain.id === state.selectedObjectId;
+selectStain(stain, already && !stain.locked ? { startTranslate: true, start: point, snapshot: JSON.parse(JSON.stringify(stain)) } : {});
+if (already && !stain.locked) canvas.setPointerCapture(event.pointerId);
+return;
+}
+}
 if (handleStainPointerDown(event, point, image)) return;
 if (!state.draft && !state.stainMode) {
 const current = selectedObject();
 const control = isEllipseLike(current?.type) && !current.locked ? hitEllipseControl(current, point, image.view.zoom) : null;
 if (control) {
 setTool("select");
+recordHistory();
 state.dragging = { mode: "ellipse-control", role: control.role, object: current, start: point, snapshot: JSON.parse(JSON.stringify(current)) };
 canvas.setPointerCapture(event.pointerId);
 return;
@@ -1115,6 +2642,7 @@ return;
 const vertex = hitVertex(current, point, image.view.zoom);
 if (vertex) {
 setTool("select");
+recordHistory();
 state.dragging = { mode: "vertex", vertex, object: current, start: point, snapshot: JSON.parse(JSON.stringify(current)) };
 canvas.setPointerCapture(event.pointerId);
 return;
@@ -1124,6 +2652,7 @@ if (hit) {
 setTool("select");
 state.selectedObjectId = hit.id;
 if (!hit.locked) {
+recordHistory();
 state.dragging = { mode: "translate", object: hit, start: point, snapshot: JSON.parse(JSON.stringify(hit)) };
 canvas.setPointerCapture(event.pointerId);
 }
@@ -1187,7 +2716,13 @@ return;
 const point = imagePoint(event);
 if (state.dragging) {
 if (state.dragging.mode === "ellipse-control") adjustEllipseControl(state.dragging, point, image.view.zoom);
-else if (state.dragging.mode === "vertex") {
+else if (state.dragging.mode === "seed") {
+state.dragging.seed.x = state.dragging.origin.x + point.x - state.dragging.start.x;
+state.dragging.seed.y = state.dragging.origin.y + point.y - state.dragging.start.y;
+} else if (state.dragging.mode === "seed-direction") {
+const seed = state.dragging.seed;
+if (distance(point, seed) > 2) seed.direction = Math.atan2(point.y - seed.y, point.x - seed.x);
+} else if (state.dragging.mode === "vertex") {
 setVertexPoint(state.dragging.object, state.dragging.vertex, { x: point.x, y: point.y });
 renderMeasurements();
 renderCalibration();
@@ -1199,17 +2734,34 @@ translateObject(state.dragging.object, state.dragging.snapshot, dx, dy);
 draw();
 return;
 }
-if (state.tool === "select") {
-const object = selectedObject();
-const control = isEllipseLike(object?.type) && !object.locked ? hitEllipseControl(object, point, image.view.zoom) : null;
-const vertex = hitVertex(object, point, image.view.zoom);
-canvas.style.cursor = control || vertex ? (control?.role === "rotation" ? "grab" : "pointer") : "default";
-}
 if (state.draft) {
 state.draft.current = point;
 state.draft.closeCandidate = nearFirstPoint(point, image);
 draw();
+return;
 }
+updateStainHover(point);
+}
+function updateStainHover(point) {
+const image = activeImage();
+const current = selectedObject();
+const control = isEllipseLike(current?.type) && !current.locked ? hitEllipseControl(current, point, image.view.zoom) : null;
+const vertex = hitVertex(current, point, image.view.zoom);
+const seedTip = state.stainMode === "centers" ? hitSeedVectorTip(point) : null;
+const seed = state.stainMode === "centers" ? hitSeedAt(point) : null;
+const stain = ["stainColor", "stainColorLight", "backgroundColor", "smallSize", "largeSize", "stainDirection", "detect", "exclude", "centers"].includes(state.stainMode || "")
+? null
+: hitStainAt(point);
+const hoverId = stain?.id || seedTip?.id || seed?.id || null;
+if (hoverId !== state.hoverObjectId) {
+state.hoverObjectId = hoverId;
+draw();
+}
+if (control) canvas.style.cursor = control.role === "rotation" ? "grab" : "pointer";
+else if (vertex) canvas.style.cursor = "pointer";
+else if (seedTip) canvas.style.cursor = "grab";
+else if (seed || stain) canvas.style.cursor = "pointer";
+else canvas.style.cursor = state.tool === "select" && state.stainMode !== "centers" ? "default" : "crosshair";
 }
 function canvasPointerUp(event) {
 if (state.panning) {
@@ -1223,14 +2775,32 @@ try { canvas.releasePointerCapture(event.pointerId); } catch {}
 refreshUI();
 return;
 }
+if (state.draft?.type === "stainDirection") {
+const session = ensureStainSession();
+const end = imagePoint(event);
+if (distance(state.draft.start, end) > 4) {
+recordHistory();
+session.direction = Math.atan2(end.y - state.draft.start.y, end.x - state.draft.start.x);
+session.directionStart = { ...state.draft.start };
+session.directionEnd = { ...end };
+}
+state.draft = null;
+state.stainMode = null;
+refreshUI();
+advanceStainWizardIfDone();
+try { canvas.releasePointerCapture(event.pointerId); } catch {}
+return;
+}
 if (state.draft?.type === "stainSample") {
 const session = ensureStainSession();
 const sampleMode = state.draft.mode;
+recordHistory();
 session[sampleMode] = Math.max(2, distance(state.draft.start, imagePoint(event)));
 state.draft = null;
 state.stainMode = null;
 updateHint(sampleMode === "largeSize" ? "Large stain sampled." : "Small stain sampled.");
 refreshUI();
+advanceStainWizardIfDone();
 try { canvas.releasePointerCapture(event.pointerId); } catch {}
 return;
 }
@@ -1361,11 +2931,39 @@ return;
 if (drag.role.startsWith("major")) object.rx = Math.max(snapshot.ry + minimum, Math.abs(local.x));
 if (drag.role.startsWith("minor")) object.ry = Math.max(minimum, Math.min(snapshot.rx - minimum, Math.abs(local.y)));
 }
+function hitStainAt(point) {
+const image = activeImage();
+if (!image) return null;
+const threshold = 10 / image.view.zoom;
+return [...image.objects].reverse().find((object) => isSessionStain(object) && objectIsDrawn(object, image) && objectDistance(object, point) <= threshold) || null;
+}
+function selectingStainKeepsTool() {
+return state.tool === "stainCount" || state.stainWizardOpen;
+}
+function selectStain(stain, { startTranslate, start, snapshot } = {}) {
+state.selectedObjectId = stain.id;
+if (state.stainMode === "manual" && state.stainVariant !== "manual") state.stainMode = null;
+if (!selectingStainKeepsTool()) {
+state.tool = "select";
+$$(".tool[data-tool]").forEach((button) => button.classList.toggle("active", button.dataset.tool === "select"));
+canvas.style.cursor = "default";
+}
+if (startTranslate && !stain.locked) {
+recordHistory();
+state.dragging = { mode: "translate", object: stain, start, snapshot };
+}
+refreshUI();
+}
+function deleteStain(stain) {
+if (!stain) return;
+state.selectedObjectId = stain.id;
+deleteSelected();
+}
 function hitTest(point) {
 const image = activeImage();
 if (!image) return null;
 const threshold = 10 / image.view.zoom;
-return [...image.objects].reverse().find((object) => object.visible !== false && objectDistance(object, point) <= threshold) || null;
+return [...image.objects].reverse().find((object) => objectIsDrawn(object, image) && objectDistance(object, point) <= threshold) || null;
 }
 function objectDistance(object, point) {
 if (["distance", "scale", "reference"].includes(object.type)) return pointSegmentDistance(point, object.p1, object.p2);
@@ -1380,6 +2978,7 @@ const chord = pointSegmentDistance(point, rotateEllipsePoint(object, 0, -object.
 const local = ellipseLocalPoint(object, point);
 if (local.x < 0) return chord;
 const r = Math.hypot(local.x / Math.max(object.rx, 1), local.y / Math.max(object.ry, 1));
+if (r <= 1) return 0;
 return Math.min(chord, Math.abs(r - 1) * Math.min(object.rx, object.ry));
 }
 if (object.type === "polyline" || object.type === "polygon") {
@@ -1422,12 +3021,13 @@ draw();
 function refreshUI() {
 const image = activeImage();
 $("#emptyState").hidden = Boolean(image) || state.projectStarted;
-["#exportImageBtn", "#exportCsvBtn", "#fitCanvasBtn"].forEach((selector) => $(selector).disabled = !image);
+["#exportImageBtn", "#exportCsvBtn", "#exportPdfBtn", "#fitCanvasBtn"].forEach((selector) => $(selector).disabled = !image);
 renderFilmstrip();
 renderStructure();
 renderProperties();
 renderCalibration();
 renderMeasurements();
+renderStainWizard();
 draw();
 }
 function renderFilmstrip() {
@@ -1456,21 +3056,65 @@ $("#structureList").innerHTML = "";
 $("#structureEmpty").hidden = Boolean(image);
 if (!image) return;
 const imageRow = document.createElement("div");
-imageRow.className = "structure-item";
+imageRow.className = "structure-item image-row";
 imageRow.innerHTML = `<span class="structure-icon"><img alt=""></span><span class="name"></span>`;
 imageRow.querySelector("img").src = image.element.src;
 imageRow.querySelector(".name").textContent = image.name;
 $("#structureList").appendChild(imageRow);
+const collapsedSessions = new Set(image.objects.filter((item) => item.type === "stainCount" && item.structureCollapsed).map((item) => item.id));
 image.objects.forEach((object) => {
+if (object.sessionId && collapsedSessions.has(object.sessionId)) return;
+const hidden = object.visible === false;
 const row = document.createElement("div");
-row.className = `structure-item${object.id === state.selectedObjectId ? " selected" : ""}${object.sessionId ? " child" : ""}`;
+row.className = `structure-item${object.id === state.selectedObjectId ? " selected" : ""}${object.sessionId ? " child" : ""}${hidden ? " hidden-object" : ""}${object.structureCollapsed ? " collapsed" : ""}`;
 row.dataset.id = object.id;
 row.innerHTML = `<span class="structure-icon">${structureIcon(object)}</span><span class="name"></span>`;
-row.querySelector(".name").textContent = object.name;
+const childCount = object.type === "stainCount" ? image.objects.filter((item) => item.sessionId === object.id).length : 0;
+row.querySelector(".name").textContent = object.type === "stainCount" && object.structureCollapsed && childCount
+? `${object.name} (${childCount})`
+: object.name;
 row.addEventListener("click", () => selectObject(object.id));
+if (object.type === "stainCount") {
+row.title = object.structureCollapsed ? "Double-click to expand stains" : "Double-click to collapse stains";
+row.addEventListener("dblclick", (event) => {
+event.preventDefault();
+object.structureCollapsed = !object.structureCollapsed;
+renderStructure();
+});
+const chart = document.createElement("button");
+chart.type = "button";
+chart.className = "structure-action";
+chart.title = "Stain table";
+chart.setAttribute("aria-label", "Stain table");
+chart.innerHTML = CHART_ICON;
+chart.addEventListener("click", (event) => {
+event.stopPropagation();
+openStainChart(object);
+});
+row.append(chart);
+}
+const eye = document.createElement("button");
+eye.type = "button";
+eye.className = "structure-action";
+eye.style.gridColumn = "4";
+eye.title = hidden ? "Show" : "Hide";
+eye.setAttribute("aria-label", hidden ? "Show" : "Hide");
+eye.innerHTML = hidden ? EYE_CLOSED_ICON : EYE_OPEN_ICON;
+eye.addEventListener("click", (event) => {
+event.stopPropagation();
+recordHistory();
+object.visible = hidden;
+renderStructure();
+renderProperties();
+draw();
+});
+row.append(eye);
 $("#structureList").appendChild(row);
 });
 }
+const EYE_OPEN_ICON = `<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const EYE_CLOSED_ICON = `<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 10.6A3 3 0 0 0 13.4 13.4M9.9 5.1A11 11 0 0 1 12 5c6.5 0 10 7 10 7a16 16 0 0 1-3.2 3.8M6.1 6.1C3.8 7.8 2 12 2 12s3.5 7 10 7a11 11 0 0 0 3.1-.4"/></svg>`;
+const CHART_ICON = `<svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="M8 16v-5M12 16V8M16 16v-8"/></svg>`;
 function structureIcon(object) {
 const icons = {
 scale: `<svg viewBox="0 0 24 24"><path d="M4 17L17 4M7 19l-2-2m6-2-2-2m6-2-2-2m6-2-2-2"/></svg>`,
@@ -1492,6 +3136,11 @@ const key = object.type === "point" ? `point-${object.pointStyle || "cross"}` : 
 return icons[key] || icons.distance;
 }
 function selectObject(id) {
+const object = activeImage()?.objects.find((item) => item.id === id);
+if (isSessionStain(object)) {
+selectStain(object);
+return;
+}
 state.selectedObjectId = id;
 setTool("select");
 refreshUI();
@@ -1518,12 +3167,21 @@ if (["distance", "reference", "polyline", "polygon", "angle"].includes(object.ty
 if (object.type === "halfEllipse") {
 const units = activeImage()?.calibration?.units || "px";
 const multiplier = unitScale() || 1;
-form.append(readonlyField("Half length", `${(object.rx * multiplier).toFixed(2)} ${units}`));
-form.append(readonlyField("Full length", `${(object.rx * 2 * multiplier).toFixed(2)} ${units}`));
+form.append(readonlyField("Length", `${(object.rx * 2 * multiplier).toFixed(2)} ${units}`));
 form.append(readonlyField("Width", `${(object.ry * 2 * multiplier).toFixed(2)} ${units}`));
 form.append(numberField("Gamma angle", ellipseGammaDegrees(object).toFixed(1), (value) => object.rotation = rotationFromGammaDegrees(value), { min: 0, max: 360, step: .1 }));
 form.append(readonlyField("Alpha angle", `${ellipseAlphaDegrees(object).toFixed(1)}°`));
+form.append(sessionButton("Flip direction", () => {
+object.rotation = normalizeAngle((object.rotation || 0) + Math.PI);
+refreshAfterPropertyChange();
+}));
 form.append(checkField("Show points", object.showPoints !== false, (checked) => object.showPoints = checked));
+if (isSessionStain(object)) {
+form.append(readonlyField("Source", object.source === "manual" ? "Manually marked" : "Auto detected"));
+const remove = sessionButton("Delete stain", () => deleteStain(object));
+remove.classList.add("danger");
+form.append(remove);
+}
 }
 if (object.type === "ellipse" || object.type === "circle") {
 const scale = unitScale(); const units = activeImage()?.calibration?.units || "px";
@@ -1578,24 +3236,31 @@ return row;
 }
 function rangeField(title, value, handler) {
 const input = Object.assign(document.createElement("input"), { type: "range", min: 0, max: 100, value });
+const label = makeLabel(`${title} ${value}`, input);
+const caption = label.firstChild;
+input.addEventListener("pointerdown", recordHistory);
 input.addEventListener("input", () => {
-handler(Number(input.value));
-invalidateStainMask(selectedObject());
+const next = Number(input.value);
+handler(next);
+caption.textContent = `${title} ${next}`;
+invalidateStainMask(stainSession() || selectedObject());
 draw();
 });
-return makeLabel(`${title} ${value}`, input);
+return label;
 }
 function appendStainSessionFields(form, session) {
 const image = activeImage();
-const stains = sessionStains(session, image);
 const units = image?.calibration?.units || "px";
 const scale = unitScale() || 1;
-const regionArea = session.detectRegion?.length >= 3 ? polygonArea(session.detectRegion) : (image ? image.width * image.height : 0);
-const area = regionArea * scale * scale;
-const density = area > 0 ? stains.length / area : 0;
-form.append(readonlyField("Count", String(stains.length)));
-form.append(readonlyField("Density", `${density < 0.001 ? density.toExponential(2) : density.toFixed(4)} / ${units}²`));
+const counts = stainSourceCounts(session, image);
+form.append(readonlyField("Count", String(counts.total)));
+form.append(readonlyField("Auto detected", String(counts.auto)));
+form.append(readonlyField("Manually marked", String(counts.manual)));
+form.append(readonlyField("Density", stainDensityLabel(session, image)));
+form.append(readonlyField("Direction", formatStainDirection(session) || "—"));
+form.append(sessionButton("Setup guide", openStainWizard));
 form.append(swatchRow("Stain color", session.stainColor));
+form.append(swatchRow("Lighter stain", session.stainColorLight));
 form.append(swatchRow("Background", session.backgroundColor));
 form.append(readonlyField("Small sample", session.smallSize ? `${(session.smallSize * scale).toFixed(2)} ${units}` : "—"));
 form.append(readonlyField("Large sample", session.largeSize ? `${(session.largeSize * scale).toFixed(2)} ${units}` : "—"));
@@ -1603,24 +3268,30 @@ const samples = document.createElement("div");
 samples.className = "session-actions";
 samples.append(
 sessionButton("Stain color", () => setStainMode("stainColor")),
+sessionButton("Lighter stain", () => setStainMode("stainColorLight")),
 sessionButton("Background", () => setStainMode("backgroundColor")),
 sessionButton("Small stain", () => setStainMode("smallSize")),
 sessionButton("Large stain", () => setStainMode("largeSize")),
+sessionButton("Direction", () => setStainMode("stainDirection")),
 sessionButton("Detect region", () => setStainMode("detect")),
 sessionButton("Exclude region", () => setStainMode("exclude")),
 );
 form.append(samples);
-form.append(rangeField("Separation", session.separation ?? 35, (value) => session.separation = value));
-form.append(rangeField("Size", session.sizeTune ?? 20, (value) => session.sizeTune = value));
-form.append(rangeField("Front / fill", session.fill ?? 40, (value) => session.fill = value));
+form.append(rangeField("Color Threshold", session.separation ?? 20, (value) => session.separation = value));
+form.append(rangeField("Size Threshold", session.sizeTune ?? 10, (value) => session.sizeTune = value));
+form.append(rangeField("Front / fill", session.fill ?? 15, (value) => session.fill = value));
 const actions = document.createElement("div");
 actions.className = "session-stack";
+const fitBtn = sessionButton("Fit Ellipses", fitEllipsesFromCenters);
+fitBtn.disabled = !(session.seedCenters || []).length;
 actions.append(
-sessionButton("Auto Detect", autoDetectStains),
-sessionButton("Manually Mark", () => setStainMode("manual")),
+sessionButton("Find Centers", autoDetectStains),
+fitBtn,
+sessionButton("Manual marking", () => { enterManualStains(); setTool("stainCount"); }),
 );
 if ((session.excludeRegions || []).length) {
 actions.append(sessionButton("Clear exclude regions", () => {
+recordHistory();
 session.excludeRegions = [];
 invalidateStainMask(session);
 refreshUI();
@@ -1629,10 +3300,11 @@ refreshUI();
 form.append(actions);
 const note = document.createElement("p");
 note.className = "session-note";
-note.textContent = "The cyan overlay is the live mask. Auto Detect replaces previous auto stains and keeps marks you added by hand.";
+note.textContent = "Assisted: sample a dark body and optionally a lighter body, Find Centers, click any missed cyan stain, then Fit Ellipses. Manual: click and drag half-ellipses.";
 form.append(note);
 }
 function convertEllipseShape(object, makeCircle) {
+recordHistory();
 if (makeCircle && object.type !== "circle") {
 const radius = (Math.abs(object.rx) + Math.abs(object.ry)) / 2;
 object.type = "circle";
@@ -1650,13 +3322,17 @@ renderProperties();
 }
 function fieldTitle(text) { const div = document.createElement("div"); div.className = "property-title"; div.textContent = text; return div; }
 function makeLabel(title, input) { const label = document.createElement("label"); label.append(document.createTextNode(title), input); return label; }
-function bindInput(input, handler) { input.addEventListener("input", () => { handler(input.type === "number" ? Number(input.value) : input.value); refreshAfterPropertyChange(); }); return input; }
+function bindInput(input, handler) {
+input.addEventListener("focus", recordHistory);
+input.addEventListener("input", () => { handler(input.type === "number" ? Number(input.value) : input.value); refreshAfterPropertyChange(); });
+return input;
+}
 function textField(title, value, handler) { const input = bindInput(Object.assign(document.createElement("input"), { value }), handler); return makeLabel(title, input); }
 function numberField(title, value, handler, options = {}) { const input = Object.assign(document.createElement("input"), { type: "number", value }); Object.entries(options).forEach(([key, val]) => input[key] = val); bindInput(input, handler); return makeLabel(title, input); }
 function readonlyField(title, value) { const input = Object.assign(document.createElement("input"), { value, readOnly: true }); return makeLabel(title, input); }
 function selectField(title, value, options, handler) { const select = document.createElement("select"); options.forEach((option) => { const item = typeof option === "string" ? { value: option, label: option } : option; select.add(new Option(item.label, item.value, item.value === value, item.value === value)); }); bindInput(select, handler); return makeLabel(title, select); }
 function colorField(title, value, handler) { const input = Object.assign(document.createElement("input"), { type: "color", value }); bindInput(input, handler); return makeLabel(title, input); }
-function checkField(title, checked, handler) { const label = document.createElement("label"); label.className = "inline"; const input = Object.assign(document.createElement("input"), { type: "checkbox", checked }); input.addEventListener("change", () => { handler(input.checked); refreshAfterPropertyChange(); }); label.append(document.createTextNode(title), input); return label; }
+function checkField(title, checked, handler) { const label = document.createElement("label"); label.className = "inline"; const input = Object.assign(document.createElement("input"), { type: "checkbox", checked }); input.addEventListener("change", () => { recordHistory(); handler(input.checked); refreshAfterPropertyChange(); }); label.append(document.createTextNode(title), input); return label; }
 function refreshAfterPropertyChange() { renderStructure(); renderCalibration(); renderMeasurements(); draw(); }
 function renderCalibration() {
 const image = activeImage();
@@ -1687,7 +3363,15 @@ $("#measurementList").appendChild(item);
 }
 function deleteSelected() {
 const image = activeImage();
+if (state.stainMode === "centers" && state.selectedSeedId) {
+const seed = sessionSeeds(stainSession(image)).find((item) => item.id === state.selectedSeedId);
+if (seed) {
+removeSeedCenter(seed);
+return;
+}
+}
 if (!image || !state.selectedObjectId) return;
+recordHistory();
 const index = image.objects.findIndex((object) => object.id === state.selectedObjectId);
 if (index < 0) return;
 const [removed] = image.objects.splice(index, 1);
@@ -1698,6 +3382,9 @@ invalidateStainMask(removed);
 } else if (removed.sessionId) {
 const session = image.objects.find((object) => object.id === removed.sessionId);
 if (session) renumberStains(session, image);
+state.selectedObjectId = selectingStainKeepsTool() ? removed.sessionId : null;
+refreshUI();
+return;
 }
 state.selectedObjectId = null;
 refreshUI();
@@ -1707,7 +3394,12 @@ const image = activeImage();
 if (!image) return;
 const out = document.createElement("canvas"); out.width = image.width; out.height = image.height;
 draw(out.getContext("2d"), image, true);
-out.toBlob((blob) => downloadBlob(blob, `${stripExtension(image.name)}-annotated.png`), "image/png");
+out.toBlob((blob) => {
+if (!blob) return;
+saveBlob(blob, `${stripExtension(image.name)}-annotated.png`, [
+{ description: "PNG image", accept: { "image/png": [".png"] } },
+]);
+}, "image/png");
 }
 function exportCsv() {
 const rows = [["Project", "Image", "Object", "Type", "Value", "Stain #", "Length", "Width", "Alpha", "Gamma", "Source"]];
@@ -1729,7 +3421,104 @@ object.source || "",
 ]);
 }));
 const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n");
-downloadBlob(new Blob([csv], { type: "text/csv" }), `${safeName(state.project.name)}-measurements.csv`);
+saveBlob(new Blob([csv], { type: "text/csv" }), `${safeName(state.project.name)}-measurements.csv`, [
+{ description: "CSV spreadsheet", accept: { "text/csv": [".csv"] } },
+]);
+}
+function escapeHtml(value) {
+return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+}
+function markedImageDataUrl(image, maxEdge = 1200) {
+const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
+const out = document.createElement("canvas");
+out.width = Math.max(1, Math.round(image.width * scale));
+out.height = Math.max(1, Math.round(image.height * scale));
+const context = out.getContext("2d");
+context.scale(scale, scale);
+draw(context, image, true);
+return out.toDataURL("image/jpeg", 0.82);
+}
+function exportPdfReport() {
+if (!state.project.images.length) return;
+syncProjectMetadata();
+const project = state.project;
+const rows = project.images.flatMap((image) => image.objects.map((object) => {
+const scale = unitScale(image) || 1;
+const stain = object.type === "halfEllipse" && object.stainNumber;
+return `<tr>
+      <td>${escapeHtml(image.name)}</td>
+      <td>${escapeHtml(object.name)}</td>
+      <td>${escapeHtml(object.type)}</td>
+      <td>${escapeHtml(objectValue(object, image))}</td>
+      <td>${stain ? object.stainNumber : ""}</td>
+      <td>${stain ? (object.rx * 2 * scale).toFixed(3) : ""}</td>
+      <td>${stain ? (object.ry * 2 * scale).toFixed(3) : ""}</td>
+      <td>${stain ? ellipseAlphaDegrees(object).toFixed(2) : ""}</td>
+      <td>${stain ? ellipseGammaDegrees(object).toFixed(2) : ""}</td>
+      <td>${escapeHtml(object.source || "")}</td>
+    </tr>`;
+})).join("");
+const marked = project.images.map((image) => `
+    <section class="page">
+      <h2>${escapeHtml(image.name)}</h2>
+      <img src="${markedImageDataUrl(image)}" alt="">
+    </section>`).join("");
+const chartPages = project.images.flatMap((image) => {
+const session = stainSession(image);
+if (!session) return [];
+return stainChartSpecs(session, image).map((spec) => `
+      <section class="chart-page">
+        <h2>${escapeHtml(image.name)} — ${escapeHtml(spec.title)}</h2>
+        <p>${escapeHtml(spec.caption)}</p>
+        ${chartNodeMarkup(spec, image)}
+      </section>`);
+}).join("");
+const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(project.name)} report</title>
+    <style>
+      body { font: 12px/1.45 Segoe UI, sans-serif; color: #111; margin: 24px; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      h2 { font-size: 14px; margin: 18px 0 8px; }
+      p { color: #444; margin: 0 0 12px; }
+      .meta { color: #444; margin-bottom: 16px; }
+      table { border-collapse: collapse; width: 100%; font-size: 11px; }
+      th, td { border: 1px solid #ccc; padding: 5px 6px; text-align: left; }
+      th { background: #f3f3f3; }
+      img { max-width: 100%; height: auto; border: 1px solid #ddd; }
+      .page { page-break-inside: avoid; margin-top: 18px; }
+      .chart-page { page-break-before: always; }
+      .chart-page svg { width: 100%; height: auto; max-height: 8.5in; }
+      .chart-page img { max-height: 8.5in; display: block; }
+    </style></head><body>
+    <h1>${escapeHtml(project.name)}</h1>
+    <div class="meta">
+      <div>Case / Reference: ${escapeHtml(project.caseNumber || "—")}</div>
+      <div>Notes: ${escapeHtml(project.notes || "—")}</div>
+      <div>Generated: ${escapeHtml(new Date().toLocaleString())}</div>
+      <div>ELlipserWeb © 2026 ai2-3D</div>
+    </div>
+    <h2>Measurements</h2>
+    <table>
+      <thead><tr><th>Image</th><th>Object</th><th>Type</th><th>Value</th><th>Stain #</th><th>Length</th><th>Width</th><th>Alpha</th><th>Gamma</th><th>Source</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="10">No measurements.</td></tr>`}</tbody>
+    </table>
+    ${chartPages}
+    ${marked}
+    </body></html>`;
+const frame = document.createElement("iframe");
+frame.setAttribute("aria-hidden", "true");
+Object.assign(frame.style, { position: "fixed", right: "0", bottom: "0", width: "0", height: "0", border: "0" });
+document.body.append(frame);
+const doc = frame.contentDocument;
+doc.open();
+doc.write(html);
+doc.close();
+const cleanup = () => frame.remove();
+frame.contentWindow.addEventListener("afterprint", cleanup);
+setTimeout(() => {
+frame.contentWindow.focus();
+frame.contentWindow.print();
+setTimeout(cleanup, 4000);
+}, 250);
 }
 async function saveProject() {
 if (!state.project.images.length) { alert("Add at least one image before saving the project."); return; }
@@ -1746,7 +3535,9 @@ objects: image.objects,
 const files = [{ name: "manifest.json", bytes: new TextEncoder().encode(JSON.stringify(manifest, null, 2)) }];
 state.project.images.forEach((image, index) => files.push({ name: manifest.images[index].path, bytes: image.bytes }));
 const zip = createZip(files);
-downloadBlob(new Blob([zip], { type: "application/octet-stream" }), `${safeName(state.project.name)}.elp`);
+await saveBlob(new Blob([zip], { type: "application/octet-stream" }), `${safeName(state.project.name)}.elp`, [
+{ description: "ELlipserWeb project", accept: { "application/octet-stream": [".elp"] } },
+]);
 }
 async function openProjectFile(file) {
 try {
@@ -1772,6 +3563,7 @@ state.projectStarted = true;
 state.activeImageId = project.images[0]?.id || null;
 state.selectedObjectId = null;
 state.draft = null;
+clearHistory();
 populateProjectMetadata();
 refreshUI();
 requestAnimationFrame(fitActiveImage);
@@ -1916,7 +3708,7 @@ projectName.setCustomValidity("Enter a project name.");
 projectName.reportValidity();
 return;
 }
-projectName.setCustomValidity("");
+recordHistory();
 state.project = freshProject();
 state.projectStarted = true;
 state.project.name = projectName.value.trim();
@@ -1950,6 +3742,20 @@ requestAnimationFrame(resizeCanvas);
 }
 function safeName(value) { return String(value || "project").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "project"; }
 function stripExtension(value) { return value.replace(/\.[^.]+$/, ""); }
+async function saveBlob(blob, filename, types) {
+if (window.showSaveFilePicker) {
+try {
+const handle = await window.showSaveFilePicker({ suggestedName: filename, types });
+const writable = await handle.createWritable();
+await writable.write(blob);
+await writable.close();
+return;
+} catch (error) {
+if (error.name === "AbortError") return;
+}
+}
+downloadBlob(blob, filename);
+}
 function downloadBlob(blob, filename) { const url = URL.createObjectURL(blob); const a = Object.assign(document.createElement("a"), { href: url, download: filename }); a.click(); setTimeout(() => URL.revokeObjectURL(url), 1500); }
 const crcTable = (() => {
 const table = new Uint32Array(256);
@@ -1993,6 +3799,11 @@ return files;
 }
 canvas.addEventListener("pointerdown", canvasPointerDown);
 canvas.addEventListener("pointermove", canvasPointerMove);
+canvas.addEventListener("pointerleave", () => {
+if (!state.hoverObjectId) return;
+state.hoverObjectId = null;
+draw();
+});
 canvas.addEventListener("pointerup", canvasPointerUp);
 canvas.addEventListener("dblclick", canvasDoubleClick);
 canvas.addEventListener("wheel", canvasWheel, { passive: false });
@@ -2007,23 +3818,77 @@ toggleFlyout(toggle, true);
 });
 bindFlyoutHover(toggle);
 });
-$$("#ellipseFlyout button").forEach((option) => option.addEventListener("click", () => { closeFlyouts(); setTool(option.dataset.variant); }));
+$$("#ellipseFlyout button").forEach((option) => option.addEventListener("click", () => {
+closeFlyouts();
+const variant = option.dataset.variant;
+if (variant === "assisted") {
+setStainVariant("assisted");
+setTool("stainCount");
+return;
+}
+setTool(variant);
+}));
 $$("#measureFlyout button").forEach((option) => option.addEventListener("click", () => { closeFlyouts(); setTool(option.dataset.variant); }));
-document.addEventListener("click", (event) => { if (!event.target.closest(".tool-flyout, .tool-variant")) closeFlyouts(); });
+function closeFileMenu() {
+const menu = $(".file-menu");
+if (!menu) return;
+const keepClosed = menu.matches(":hover") || menu.contains(document.activeElement);
+menu.classList.remove("open");
+if (keepClosed) menu.classList.add("closed");
+else menu.classList.remove("closed");
+$("#fileMenuBtn")?.blur();
+$("#fileMenuBtn")?.setAttribute("aria-expanded", "false");
+}
+document.addEventListener("click", (event) => {
+if (!event.target.closest(".tool-flyout, .tool-variant")) closeFlyouts();
+if (!event.target.closest(".file-menu")) closeFileMenu();
+});
 window.addEventListener("resize", closeFlyouts);
 $("#newProjectPrimary").addEventListener("click", openNewProjectDialog);
-$("#loadImagesBtn").addEventListener("click", () => $("#imageInput").click());
+$("#loadImagesBtn").addEventListener("click", () => {
+closeFileMenu();
+$("#imageInput").click();
+});
 $("#sampleImageBtn").addEventListener("click", loadSampleImage);
+$("#stainSampleImageBtn").addEventListener("click", loadStainSampleImage);
+$("#helpBtn").addEventListener("click", () => $("#helpDialog").showModal());
+$("#closeHelpDialog").addEventListener("click", () => { const dialog = $("#helpDialog"); if (dialog.open) dialog.close(); });
 $("#settingsBtn").addEventListener("click", openSettingsDialog);
 $("#closeSettingsDialog").addEventListener("click", closeSettingsDialog);
+$("#closeStainChartDialog").addEventListener("click", closeStainChart);
+$("#closeStainChartViewer").addEventListener("click", closeStainChartViewer);
+$("#stainChartDialog").addEventListener("cancel", (event) => {
+if (!$("#stainChartViewer")?.hidden) {
+event.preventDefault();
+closeStainChartViewer();
+}
+});
+bindStainChartViewer();
 $("#resetSettingsBtn").addEventListener("click", resetSettings);
 $("#imageInput").addEventListener("change", (event) => { addImageFiles(event.target.files); event.target.value = ""; });
-$("#openProjectBtn").addEventListener("click", () => $("#projectInput").click());
+$("#openProjectBtn").addEventListener("click", () => {
+closeFileMenu();
+$("#projectInput").click();
+});
 $("#projectInput").addEventListener("change", (event) => { if (event.target.files[0]) openProjectFile(event.target.files[0]); event.target.value = ""; });
-$("#saveProjectBtn").addEventListener("click", saveProject);
-$("#exportImageBtn").addEventListener("click", exportCurrentImage);
-$("#exportCsvBtn").addEventListener("click", exportCsv);
-$("#newProjectBtn").addEventListener("click", openNewProjectDialog);
+$("#saveProjectBtn").addEventListener("click", () => { closeFileMenu(); saveProject(); });
+$("#exportImageBtn").addEventListener("click", () => { closeFileMenu(); exportCurrentImage(); });
+$("#exportCsvBtn").addEventListener("click", () => { closeFileMenu(); exportCsv(); });
+$("#exportPdfBtn").addEventListener("click", () => { closeFileMenu(); exportPdfReport(); });
+$("#newProjectBtn").addEventListener("click", () => { closeFileMenu(); openNewProjectDialog(); });
+$(".file-menu").addEventListener("pointerleave", () => $(".file-menu").classList.remove("closed"));
+$("#fileMenuBtn").addEventListener("click", (event) => {
+event.stopPropagation();
+const menu = $(".file-menu");
+const wasClosed = menu.classList.contains("closed");
+menu.classList.remove("closed");
+const open = wasClosed || !menu.classList.contains("open");
+menu.classList.toggle("open", open);
+$("#fileMenuBtn").setAttribute("aria-expanded", String(open));
+});
+$("#fileMenu").addEventListener("click", (event) => {
+if (event.target.closest("button") && !event.target.classList.contains("file-sub-trigger")) closeFileMenu();
+});
 $("#newProjectForm").addEventListener("submit", createNewProject);
 $("#newProjectName").addEventListener("input", (event) => event.target.setCustomValidity(""));
 $("#closeNewProjectDialog").addEventListener("click", closeNewProjectDialog);
@@ -2037,17 +3902,59 @@ $("#toggleLeftPanel").addEventListener("click", () => togglePanel("left"));
 $("#toggleRightPanel").addEventListener("click", () => togglePanel("right"));
 $("#toggleFilmstrip").addEventListener("click", toggleFilmstrip);
 $("#fitCanvasBtn").addEventListener("click", fitActiveImage);
+$("#closeStainWizard").addEventListener("click", closeStainWizard);
+$("#stainWizard").addEventListener("cancel", (event) => event.preventDefault());
+bindStainWizardDrag();
+$("#stainWizardBack").addEventListener("click", stainWizardBack);
+$("#stainWizardSkip").addEventListener("click", stainWizardSkip);
+$("#stainWizardNext").addEventListener("click", stainWizardNext);
+$("#projectName").addEventListener("focus", recordHistory);
+$("#caseNumber").addEventListener("focus", recordHistory);
+$("#projectNotes").addEventListener("focus", recordHistory);
 $("#projectName").addEventListener("input", syncProjectMetadata);
 $("#caseNumber").addEventListener("input", syncProjectMetadata);
 $("#projectNotes").addEventListener("input", syncProjectMetadata);
 window.addEventListener("keydown", (event) => {
-if (document.querySelector("dialog[open]")) return;
+if (document.querySelector("dialog[open]:not(#stainWizard)")) return;
 if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
-const shortcuts = { s: "scale", p: "point", d: "distance", a: "angle", c: "circle", e: "ellipse", h: "halfEllipse", l: "polyline", g: "polygon", t: "text", n: "stainCount" };
-if (shortcuts[event.key.toLowerCase()]) setTool(shortcuts[event.key.toLowerCase()]);
+const key = event.key.toLowerCase();
+if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "z") {
+event.preventDefault();
+if (event.shiftKey) redo();
+else undo();
+return;
+}
+if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "y") {
+event.preventDefault();
+redo();
+return;
+}
+if (event.ctrlKey || event.metaKey) return;
+const shortcuts = { v: "select", s: "scale", p: "point", d: "distance", a: "angle", c: "circle", e: "ellipse", h: "halfEllipse", l: "polyline", g: "polygon", t: "text", n: "stainCount" };
+if (shortcuts[key]) setTool(shortcuts[key]);
+if (key === "f") {
+event.preventDefault();
+flipSelectedEllipse();
+return;
+}
 if (event.key === "Delete" || event.key === "Backspace") deleteSelected();
 if (event.key === "Escape") {
+if (state.stainWizardOpen) {
+state.draft = null;
+const step = stainWizardSteps[state.stainWizardIndex];
+const session = stainSession();
+state.stainMode = step?.mode || (step?.id === "detectRun" && (session?.seedCenters || []).length ? "centers" : null);
+renderStainWizard();
+updateHint();
+draw();
+return;
+}
 if (state.stainMode || state.draft?.stainManual || state.draft?.type === "stainDetect" || state.draft?.type === "stainExclude" || state.draft?.type === "stainSample") {
+if (state.stainVariant === "manual" && state.tool === "stainCount") {
+state.draft = null;
+setTool("select");
+return;
+}
 state.stainMode = null;
 state.draft = null;
 updateHint();

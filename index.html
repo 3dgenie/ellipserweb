@@ -14,22 +14,36 @@
 <body>
 <div class="app-shell">
 <header class="topbar">
-<div class="brand" aria-label="ELlipserWeb">
-<span class="brand-mark" aria-hidden="true"></span>
-<span>ELlipser<span>Web</span></span>
+<nav class="file-menu" aria-label="File">
+<button type="button" id="fileMenuBtn" class="button ghost file-menu-btn" aria-haspopup="true" aria-expanded="false" aria-controls="fileMenu">File</button>
+<div id="fileMenu" class="file-dropdown" role="menu">
+<button type="button" id="newProjectBtn" role="menuitem">New</button>
+<button type="button" id="openProjectBtn" role="menuitem">Open</button>
+<button type="button" id="saveProjectBtn" role="menuitem">Save</button>
+<div class="file-sub" role="none">
+<button type="button" class="file-sub-trigger" role="menuitem" aria-haspopup="true" aria-expanded="false">Import</button>
+<div class="file-submenu" role="menu">
+<button type="button" id="loadImagesBtn" role="menuitem">Image</button>
 </div>
+</div>
+<div class="file-sub" role="none">
+<button type="button" class="file-sub-trigger" role="menuitem" aria-haspopup="true" aria-expanded="false">Export</button>
+<div class="file-submenu" role="menu">
+<button type="button" id="exportCsvBtn" role="menuitem" disabled>CSV Report</button>
+<button type="button" id="exportPdfBtn" role="menuitem" disabled>PDF Report</button>
+<button type="button" id="exportImageBtn" role="menuitem" disabled>Marked Image</button>
+</div>
+</div>
+</div>
+</nav>
 <div class="top-actions">
-<button id="newProjectBtn" class="button ghost">New</button>
-<button id="openProjectBtn" class="button ghost">Open .elp</button>
-<button id="loadImagesBtn" class="button ghost">Load Images</button>
-<button id="saveProjectBtn" class="button ghost">Save .elp</button>
-<button id="exportImageBtn" class="button ghost" disabled>Export Image</button>
-<button id="exportCsvBtn" class="button ghost" disabled>Export CSV</button>
+<button id="helpBtn" class="button ghost icon-only" title="Help" aria-label="Help"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.6 9.2a2.5 2.5 0 0 1 4.7.9c0 1.5-2.3 1.7-2.3 3.2"></path><circle cx="12" cy="17.1" r=".7" fill="currentColor" stroke="none"></circle></svg></button>
 <button id="settingsBtn" class="button ghost icon-only" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 13a8 8 0 0 0 .06-1 8 8 0 0 0-.06-1l2.11-1.65-2-3.46-2.49.8a8 8 0 0 0-1.73-1L12.7 2h-1.4L10.7 4.69a8 8 0 0 0-1.73 1l-2.49-.8-2 3.46L6.6 11a8 8 0 0 0 0 2l-2.11 1.65 2 3.46 2.49-.8a8 8 0 0 0 1.73 1L11.3 22h1.4l.6-2.69a8 8 0 0 0 1.73-1l2.49.8 2-3.46Z"></path></svg></button>
 </div>
 </header>
 <main class="workspace">
 <nav class="tool-rail" aria-label="Measurement tools">
+<button class="tool active" data-tool="select" title="Select (Esc)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5 18 14.2l-5.1.4 2.5 6.4-2.4.9-2.5-6.4L6 19.8Z" style="fill: currentColor; stroke: none"></path></svg>Select</button>
 <button class="tool" data-tool="scale" title="Scale (S)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17L17 4M7 19l-2-2m6-2-2-2m6-2-2-2m6-2-2-2"></path></svg>Scale</button>
 <div class="tool-group">
 <button class="tool" id="measureTool" data-tool="distance" title="Distance (D)"><svg class="tool-svg tool-icon" viewBox="0 0 32 24" aria-hidden="true"><path d="M7 16.5L17 7.5"></path><circle cx="7" cy="16.5" r="1.7" style="fill: currentColor; stroke: none"></circle><circle cx="17" cy="7.5" r="1.7" style="fill: currentColor; stroke: none"></circle></svg><span class="tool-name">Measure</span></button>
@@ -43,7 +57,6 @@
 <button class="tool" data-tool="polyline" title="Polyline (L)"><svg class="tool-svg" viewBox="0 0 32 24" aria-hidden="true"><polyline points="3,20 11,7 20,16 29,4"></polyline></svg>Polyline</button>
 <button class="tool" data-tool="polygon" title="Polygon (G)"><span>⬠</span>Polygon</button>
 <button class="tool" data-tool="text" title="Text (T)"><span>T</span>Text</button>
-<button class="tool" data-tool="stainCount" title="Stains (N)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5.5A5 3 0 0 1 7 11.5Z"></path><path d="M16 9.5A6 3.6 0 0 1 16 16.7Z"></path></svg>Stains</button>
 </nav>
 <aside class="object-sidebar">
 <button id="toggleLeftPanel" class="panel-collapse panel-collapse-left" aria-label="Collapse Structure and Properties" aria-expanded="true">‹</button>
@@ -51,7 +64,7 @@
 <div class="panel-heading">
 <h2>Structure</h2>
 </div>
-<div id="structureEmpty" class="empty-small">Load an image to begin.</div>
+<div id="structureEmpty" class="empty-small">Import an image to begin.</div>
 <div id="structureList" class="structure-list" role="listbox" aria-label="Objects"></div>
 </section>
 <section class="panel properties-panel">
@@ -68,7 +81,6 @@
 <p>Images and measurements remain on your local device.</p>
 <button id="newProjectPrimary" class="button primary">New Project</button>
 </div>
-<div id="drawingHint" class="drawing-hint" hidden></div>
 <button id="fitCanvasBtn" class="canvas-fit" title="Fit image to view" aria-label="Fit image to view" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
 </div>
 <div class="filmstrip-bar">
@@ -101,8 +113,12 @@
 </aside>
 </main>
 <footer class="statusbar">
-<div><strong>LMB</strong> Select object / draw <span class="divider">|</span> <strong>Wheel</strong> Zoom <span class="divider">|</span> <strong>RMB</strong> Pan / finish polyline, polygon, or stain region <span class="divider">|</span> <strong>Delete</strong> Remove selected</div>
-<div class="local-status"><span></span> Local processing only</div>
+<div><strong>LMB</strong> Select object / draw <span class="divider">|</span> <strong>Wheel</strong> Zoom <span class="divider">|</span> <strong>RMB</strong> Pan / finish polyline, polygon, or stain region <span class="divider">|</span> <strong>Delete</strong> Remove selected <span class="divider">|</span> <strong>F</strong> Flip ellipse</div>
+<div class="brand-status" aria-label="ELlipserWeb">
+<span class="brand-mark" aria-hidden="true"></span>
+<span class="brand-name">ELlipser<span>Web</span></span>
+<span class="brand-copy">© 2026 ai2-3D. All rights reserved.</span>
+</div>
 </footer>
 </div>
 <div id="ellipseFlyout" class="tool-flyout" role="menu" hidden>
@@ -113,6 +129,10 @@
 <button type="button" role="menuitem" data-variant="halfEllipse">
 <svg viewBox="0 0 32 24" aria-hidden="true"><path d="M16 4.5A12.5 7.5 0 0 1 16 19.5Z"></path></svg>
 <span>Half Ellipse</span>
+</button>
+<button type="button" role="menuitem" data-variant="assisted">
+<svg viewBox="0 0 32 24" aria-hidden="true"><path d="M8 6.5A6 3.4 0 0 1 8 13.3Z"></path><path d="M22 10.5A7 4 0 0 1 22 18.5Z"></path></svg>
+<span>Assisted</span>
 </button>
 </div>
 <div id="measureFlyout" class="tool-flyout" role="menu" hidden>
@@ -129,6 +149,54 @@
 <span>Angle</span>
 </button>
 </div>
+<dialog id="helpDialog" class="project-dialog help-dialog">
+<form method="dialog" class="dialog-form">
+<div class="dialog-heading">
+<div>
+<h2>About ELlipserWeb</h2>
+<p>Local photographic measurement and stain documentation in the browser.</p>
+</div>
+<button type="button" id="closeHelpDialog" class="dialog-close" aria-label="Close">×</button>
+</div>
+<div class="help-body">
+<section>
+<h3>What it does</h3>
+<p>ELlipserWeb calibrates photos, measures distances and angles, and fits ellipses to bloodstains so you can record impact angle (alpha) and travel direction (gamma). Images and measurements stay on this device.</p>
+</section>
+<section>
+<h3>Getting started</h3>
+<ol>
+<li>File → New to name the case, or File → Open to load a saved <code>.elp</code> project.</li>
+<li>File → Import → Image to add photographs.</li>
+<li>Draw a Scale on a known length so later values are in real units.</li>
+<li>Use the left tools to measure. Ellipse → Assisted finds stain centers and fits half-ellipses.</li>
+<li>Open the chart icon on a Stains session in Structure for distributions and the stain table.</li>
+<li>File → Save writes the project. File → Export makes a CSV report, a printable PDF report, or a marked PNG of the current photo.</li>
+</ol>
+</section>
+<section>
+<h3>Tools and shortcuts</h3>
+<ul>
+<li><strong>Scale, Measure, Circle, Ellipse, Polyline, Polygon, Text</strong> — click a tool, then draw on the photo.</li>
+<li><strong>Wheel</strong> zooms, <strong>right-drag</strong> pans, <strong>Delete</strong> removes the selection, <strong>F</strong> flips an ellipse, <strong>Ctrl+Z</strong> / <strong>Ctrl+Shift+Z</strong> undo and redo.</li>
+<li>Per-stain arrows at centers set travel direction before or after a fit.</li>
+</ul>
+</section>
+<section>
+<h3>Capabilities</h3>
+<ul>
+<li>Calibrated length, width, alpha, and gamma for each stain.</li>
+<li>Assisted detection with dark and light stain samples, detect/exclude regions, and manual marking.</li>
+<li>Stain charts: impact-angle and width histograms, direction rose, width vs alpha, and a location map.</li>
+<li>Project metadata, structure tree, and per-object styles.</li>
+</ul>
+</section>
+</div>
+<div class="dialog-actions">
+<button type="submit" class="button primary">Close</button>
+</div>
+</form>
+</dialog>
 <dialog id="settingsDialog" class="project-dialog settings-dialog">
 <form id="settingsForm" class="dialog-form" method="dialog">
 <div class="dialog-heading">
@@ -144,14 +212,61 @@
 </section>
 <section class="settings-section">
 <h3>Testing</h3>
-<p class="settings-note">Loads a labeled scene with a 400 px square, a 200 px circle, a 300 × 200 px triangle, and a 500 mm scale bar.</p>
+<p class="settings-note">Measurement scene: a 400 px square, a 200 px circle, a 300 × 200 px triangle, and a 500 mm scale bar.</p>
 <button type="button" id="sampleImageBtn" class="button dialog-secondary">Load Sample Scene</button>
+<p class="settings-note">Stain photo: HemoVision card and real bloodstains on a light wall. Scale is a placeholder so Auto Detect can run.</p>
+<button type="button" id="stainSampleImageBtn" class="button dialog-secondary">Load Stain Scene</button>
 </section>
 <div class="dialog-actions settings-actions">
 <button type="button" id="resetSettingsBtn" class="button dialog-secondary">Reset to Defaults</button>
 <button type="submit" class="button primary">Done</button>
 </div>
 </form>
+</dialog>
+<dialog id="stainChartDialog" class="project-dialog stain-chart-dialog">
+<form method="dialog" class="dialog-form">
+<div class="dialog-heading">
+<div>
+<h2>Stains</h2>
+<p>Measurements for every stain in this session, plus summary statistics.</p>
+</div>
+<button type="button" id="closeStainChartDialog" class="dialog-close" aria-label="Close">×</button>
+</div>
+<p id="stainChartEmpty" class="settings-note">No stains yet</p>
+<div id="stainChartGraphs" class="stain-chart-graphs" hidden></div>
+<div id="stainChartSummary" class="stain-chart-summary" hidden></div>
+<div id="stainChartTableWrap" class="stain-chart-table-wrap" hidden>
+<table class="stain-chart-table">
+<thead>
+<tr>
+<th>#</th>
+<th>Source</th>
+<th>Length</th>
+<th>Width</th>
+<th>Alpha</th>
+<th>Gamma</th>
+</tr>
+</thead>
+<tbody id="stainChartBody"></tbody>
+</table>
+</div>
+<div class="dialog-actions">
+<button type="submit" class="button primary">Done</button>
+</div>
+</form>
+<div id="stainChartViewer" class="stain-chart-viewer" hidden>
+<div class="stain-chart-viewer-head">
+<div>
+<h2 id="stainChartViewerTitle"></h2>
+<p id="stainChartViewerCaption"></p>
+</div>
+<button type="button" id="closeStainChartViewer" class="dialog-close" aria-label="Close graph">×</button>
+</div>
+<div id="stainChartViewerStage" class="stain-chart-viewer-stage">
+<div id="stainChartViewerContent" class="stain-chart-viewer-content"></div>
+</div>
+<p class="stain-chart-viewer-hint">Wheel zoom · drag to pan · Esc to close</p>
+</div>
 </dialog>
 <dialog id="newProjectDialog" class="project-dialog">
 <form id="newProjectForm" class="dialog-form">
@@ -191,6 +306,24 @@
 <button type="submit" class="button primary">Place Text</button>
 </div>
 </form>
+</dialog>
+<dialog id="stainWizard" class="stain-wizard">
+<div class="stain-wizard-head">
+<div>
+<p id="stainWizardStep" class="stain-wizard-kicker">Step 1 of 8</p>
+<h2 id="stainWizardTitle">Setup</h2>
+</div>
+<button type="button" id="closeStainWizard" class="dialog-close" aria-label="Close setup">×</button>
+</div>
+<div id="stainWizardDots" class="stain-wizard-dots" aria-hidden="true"></div>
+<p id="stainWizardCopy" class="stain-wizard-copy"></p>
+<div id="stainWizardStatus" class="stain-wizard-status"></div>
+<div id="stainWizardExtra"></div>
+<div class="stain-wizard-actions">
+<button type="button" id="stainWizardBack" class="button ghost">Back</button>
+<button type="button" id="stainWizardSkip" class="button ghost">Skip</button>
+<button type="button" id="stainWizardNext" class="button primary">Next</button>
+</div>
 </dialog>
 <dialog id="closePolygonDialog" class="project-dialog">
 <form method="dialog" class="dialog-form">
