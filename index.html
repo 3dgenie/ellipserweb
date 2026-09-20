@@ -32,11 +32,9 @@
 <nav class="tool-rail" aria-label="Measurement tools">
 <button class="tool" data-tool="scale" title="Scale (S)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17L17 4M7 19l-2-2m6-2-2-2m6-2-2-2m6-2-2-2"></path></svg>Scale</button>
 <div class="tool-group">
-<button class="tool" id="pointTool" data-tool="point" title="Point (P)"><svg class="tool-svg tool-icon" viewBox="0 0 32 24" aria-hidden="true"><path d="M16 5v14M9 12h14"></path></svg><span class="tool-name">Point</span></button>
-<button type="button" class="tool-variant" aria-controls="pointFlyout" aria-label="Point styles" aria-haspopup="menu" aria-expanded="false"></button>
+<button class="tool" id="measureTool" data-tool="distance" title="Distance (D)"><svg class="tool-svg tool-icon" viewBox="0 0 32 24" aria-hidden="true"><path d="M7 16.5L17 7.5"></path><circle cx="7" cy="16.5" r="1.7" style="fill: currentColor; stroke: none"></circle><circle cx="17" cy="7.5" r="1.7" style="fill: currentColor; stroke: none"></circle></svg><span class="tool-name">Measure</span></button>
+<button type="button" class="tool-variant" aria-controls="measureFlyout" aria-label="Measure tools" aria-haspopup="menu" aria-expanded="false"></button>
 </div>
-<button class="tool" data-tool="distance" title="Distance (D)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16.5L17 7.5"></path><circle cx="7" cy="16.5" r="1.7" style="fill: currentColor; stroke: none"></circle><circle cx="17" cy="7.5" r="1.7" style="fill: currentColor; stroke: none"></circle></svg>Distance</button>
-<button class="tool" data-tool="angle" title="Angle (A)"><span>∠</span>Angle</button>
 <button class="tool" data-tool="circle" title="Circle (C)"><span>○</span>Circle</button>
 <div class="tool-group">
 <button class="tool" id="ellipseTool" data-tool="ellipse" title="Ellipse (E)"><svg class="tool-svg tool-icon" viewBox="0 0 32 24" aria-hidden="true"><ellipse cx="16" cy="12" rx="12.5" ry="7.5"></ellipse></svg><span class="tool-name">Ellipse</span></button>
@@ -45,6 +43,7 @@
 <button class="tool" data-tool="polyline" title="Polyline (L)"><svg class="tool-svg" viewBox="0 0 32 24" aria-hidden="true"><polyline points="3,20 11,7 20,16 29,4"></polyline></svg>Polyline</button>
 <button class="tool" data-tool="polygon" title="Polygon (G)"><span>⬠</span>Polygon</button>
 <button class="tool" data-tool="text" title="Text (T)"><span>T</span>Text</button>
+<button class="tool" data-tool="stainCount" title="Stains (N)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5.5A5 3 0 0 1 7 11.5Z"></path><path d="M16 9.5A6 3.6 0 0 1 16 16.7Z"></path></svg>Stains</button>
 </nav>
 <aside class="object-sidebar">
 <button id="toggleLeftPanel" class="panel-collapse panel-collapse-left" aria-label="Collapse Structure and Properties" aria-expanded="true">‹</button>
@@ -102,7 +101,7 @@
 </aside>
 </main>
 <footer class="statusbar">
-<div><strong>LMB</strong> Select object / draw <span class="divider">|</span> <strong>Wheel</strong> Zoom <span class="divider">|</span> <strong>RMB</strong> Pan / finish polyline or polygon <span class="divider">|</span> <strong>Delete</strong> Remove selected</div>
+<div><strong>LMB</strong> Select object / draw <span class="divider">|</span> <strong>Wheel</strong> Zoom <span class="divider">|</span> <strong>RMB</strong> Pan / finish polyline, polygon, or stain region <span class="divider">|</span> <strong>Delete</strong> Remove selected</div>
 <div class="local-status"><span></span> Local processing only</div>
 </footer>
 </div>
@@ -116,18 +115,18 @@
 <span>Half Ellipse</span>
 </button>
 </div>
-<div id="pointFlyout" class="tool-flyout" role="menu" hidden>
-<button type="button" role="menuitem" data-point-style="cross">
+<div id="measureFlyout" class="tool-flyout" role="menu" hidden>
+<button type="button" role="menuitem" data-variant="point">
 <svg viewBox="0 0 32 24" aria-hidden="true"><path d="M16 5v14M9 12h14"></path></svg>
-<span>Cross</span>
+<span>Point</span>
 </button>
-<button type="button" role="menuitem" data-point-style="dot">
-<svg viewBox="0 0 32 24" aria-hidden="true"><circle cx="16" cy="12" r="4.5" style="fill: currentColor; stroke: none"></circle></svg>
-<span>Dot</span>
+<button type="button" role="menuitem" data-variant="distance">
+<svg viewBox="0 0 32 24" aria-hidden="true"><path d="M7 16.5L17 7.5"></path><circle cx="7" cy="16.5" r="1.7" style="fill: currentColor; stroke: none"></circle><circle cx="17" cy="7.5" r="1.7" style="fill: currentColor; stroke: none"></circle></svg>
+<span>Distance</span>
 </button>
-<button type="button" role="menuitem" data-point-style="crosshair">
-<svg viewBox="0 0 32 24" aria-hidden="true"><circle cx="16" cy="12" r="5"></circle><path d="M16 4v16M8 12h16"></path></svg>
-<span>Crosshair</span>
+<button type="button" role="menuitem" data-variant="angle">
+<svg viewBox="0 0 32 24" aria-hidden="true"><path d="M5 19L13 5L25 19"></path><path d="M10 14.5a7 7 0 0 0 8 0"></path></svg>
+<span>Angle</span>
 </button>
 </div>
 <dialog id="settingsDialog" class="project-dialog settings-dialog">
