@@ -21,6 +21,11 @@ stainCount: { color: "#19c9d2", lineWidth: 2 },
 },
 assisted: {
 directionToleranceDeg: 3,
+stainNumberColor: "#3d3d3d",
+},
+layout: {
+leftPanelWidth: 270,
+rightPanelWidth: 292,
 },
 };
 const styleSettingRows = [
@@ -49,6 +54,9 @@ if (incoming && typeof incoming === "object") prefs.styles[type] = { ...prefs.st
 }
 if (saved.assisted && typeof saved.assisted === "object") {
 prefs.assisted = { ...prefs.assisted, ...saved.assisted };
+}
+if (saved.layout && typeof saved.layout === "object") {
+prefs.layout = { ...prefs.layout, ...saved.layout };
 }
 return prefs;
 }
@@ -82,7 +90,7 @@ stainMode: null,
 stainVariant: "assisted",
 stainWizardOpen: false,
 stainWizardIndex: 0,
-stainWizardPos: { left: 92, top: 78 },
+stainWizardPos: null,
 stainWizardDrag: null,
 hoverObjectId: null,
 selectedSeedId: null,
@@ -175,6 +183,16 @@ if (object.type !== "ellipse" && object.type !== "halfEllipse") return;
 recordHistory();
 object.rotation = normalizeAngle((object.rotation || 0) + Math.PI);
 refreshUI();
+}
+function flipSelectedSeedDirection() {
+if (state.stainMode !== "centers" || !state.selectedSeedId) return false;
+const seed = sessionSeeds(stainSession()).find((item) => item.id === state.selectedSeedId);
+if (!seed || !Number.isFinite(seed.direction)) return false;
+recordHistory();
+seed.direction = normalizeAngle(seed.direction + Math.PI);
+seed.directionUncertain = false;
+draw();
+return true;
 }
 function unitScale(image = activeImage()) {
 if (!image?.calibration) return null;
@@ -341,7 +359,7 @@ if (showLabel) drawLabel(drawCtx, objectValue(object), object.p2, zoom);
 if (showHandles) drawHandles(drawCtx, [object.p1, object.p2, object.p3], zoom);
 } else if (object.type === "halfEllipse") {
 drawHalfEllipseShape(drawCtx, object, zoom);
-if (object.stainNumber) drawLabel(drawCtx, String(object.stainNumber), rotateEllipsePoint(object, object.rx, 0), zoom);
+if (object.stainNumber) drawStainNumber(drawCtx, String(object.stainNumber), rotateEllipsePoint(object, object.rx, 0), zoom);
 if (showLabel) drawLabel(drawCtx, objectValue(object), rotateEllipsePoint(object, object.rx, -object.ry), zoom);
 if (showHandles) drawEllipseControls(drawCtx, object, zoom);
 } else if (object.type === "stainCount") {
@@ -358,6 +376,7 @@ drawDirectionArrow(drawCtx, object.directionStart, object.directionEnd, zoom);
 }
 } else if (object.type === "ellipse" || object.type === "circle") {
 drawCtx.beginPath(); drawCtx.ellipse(object.cx, object.cy, Math.abs(object.rx), Math.abs(object.ry), object.rotation || 0, 0, Math.PI * 2); drawCtx.stroke();
+if (object.stainNumber) drawStainNumber(drawCtx, String(object.stainNumber), rotateEllipsePoint(object, object.rx, 0), zoom);
 const labelPoint = rotateEllipsePoint(object, object.rx, -object.ry);
 if (showLabel) drawLabel(drawCtx, objectValue(object), labelPoint, zoom);
 if (showHandles) drawEllipseControls(drawCtx, object, zoom);
@@ -454,6 +473,32 @@ drawCtx.fillStyle = "rgba(0, 0, 0, .82)";
 drawCtx.fillRect(x - pad, y - fontSize - pad / 2, width + pad * 2, fontSize + pad);
 drawCtx.fillStyle = "#ffffff";
 drawCtx.fillText(text, x, y);
+}
+function stainNumberColor() {
+const value = state.prefs?.assisted?.stainNumberColor;
+return typeof value === "string" && value ? value : defaultPrefs.assisted.stainNumberColor;
+}
+function drawStainNumber(drawCtx, text, point, zoom) {
+if (!text) return;
+const fontSize = 12 / zoom;
+drawCtx.font = `700 ${fontSize}px Inter, sans-serif`;
+const metrics = drawCtx.measureText(text);
+const radius = Math.max(9 / zoom, metrics.width / 2 + 5 / zoom);
+const x = point.x + 10 / zoom;
+const y = point.y - 10 / zoom;
+drawCtx.beginPath();
+drawCtx.arc(x, y, radius, 0, Math.PI * 2);
+drawCtx.fillStyle = stainNumberColor();
+drawCtx.fill();
+drawCtx.strokeStyle = "rgba(255, 255, 255, .35)";
+drawCtx.lineWidth = 1 / zoom;
+drawCtx.stroke();
+drawCtx.fillStyle = "#ffffff";
+drawCtx.textAlign = "center";
+drawCtx.textBaseline = "middle";
+drawCtx.fillText(text, x, y + 0.5 / zoom);
+drawCtx.textAlign = "start";
+drawCtx.textBaseline = "alphabetic";
 }
 function drawDirectionArrow(drawCtx, start, end, zoom) {
 drawCtx.beginPath();
@@ -801,10 +846,64 @@ state.stainVariant = variant === "manual" ? "manual" : "assisted";
 if (state.tool === "stainCount") setEllipseVariant(state.stainVariant);
 }
 function enterManualStains() {
+const session = stainSession();
+if (state.stainWizardOpen) {
+if (state.stainMode === "centers" && (session?.seedCenters || []).length) {
+state.assistedResumeMode = "centers";
+} else if (sessionFittedStains(session).length > 0) {
+state.assistedResumeMode = "ellipses";
+} else if ((session?.seedCenters || []).length) {
+state.assistedResumeMode = "centers";
+} else {
+state.assistedResumeMode = null;
+}
+}
 setStainVariant("manual");
-closeStainWizard();
 state.stainMode = "manual";
 state.draft = null;
+state.selectedSeedId = null;
+if (state.stainWizardOpen) renderStainWizard();
+updateHint("Manual marking — click and drag half-ellipses. Switch to Assisted to return to centers or fitted ellipses.");
+draw();
+}
+function sessionFittedStains(session, image = activeImage()) {
+return sessionStains(session, image).filter((stain) => stain.fromSeed || stain.source === "auto");
+}
+function enterAssistedFromWizard() {
+setStainVariant("assisted");
+state.draft = null;
+const session = stainSession();
+const seeds = session?.seedCenters || [];
+const fitted = sessionFittedStains(session);
+const resume = state.assistedResumeMode;
+state.assistedResumeMode = null;
+const wantCenters = resume === "centers" || (resume !== "ellipses" && seeds.length > 0 && fitted.length === 0);
+const wantEllipses = resume === "ellipses" || fitted.length > 0;
+if (wantCenters && seeds.length > 0) {
+enterCenterReview(seeds.length);
+if (state.stainWizardOpen) renderStainWizard();
+draw();
+return;
+}
+if (wantEllipses || sessionStains(session).length > 0) {
+state.stainMode = null;
+state.selectedSeedId = null;
+updateHint("Assisted mode — fitted ellipses are shown. Adjust them, or Find Centers / Fit Ellipses again.");
+if (state.stainWizardOpen) renderStainWizard();
+refreshUI();
+return;
+}
+if (seeds.length > 0) {
+enterCenterReview(seeds.length);
+if (state.stainWizardOpen) renderStainWizard();
+draw();
+return;
+}
+state.stainMode = null;
+state.selectedSeedId = null;
+updateHint();
+if (state.stainWizardOpen) renderStainWizard();
+draw();
 }
 function toggleFlyout(toggle, open) {
 const flyout = $(`#${toggle.getAttribute("aria-controls")}`);
@@ -892,11 +991,20 @@ return { id: uid(type), type, name: `${label} ${count}`, visible: true, locked: 
 function completeObject(object, keepTool = false) {
 recordHistory();
 const image = activeImage();
+if (object.type === "ellipse" || object.type === "halfEllipse") {
+const session = ensureStainSession(image, { record: false });
+object.sessionId = session.id;
+if (!object.source) object.source = "manual";
+}
 image.objects.push(object);
 if (object.type === "scale") {
 object.knownLength = 100;
 object.units = stylePrefs("scale").units || "mm";
 image.calibration = object;
+}
+if (object.sessionId) {
+const session = image.objects.find((item) => item.id === object.sessionId) || stainSession(image);
+if (session) renumberStains(session, image);
 }
 state.selectedObjectId = object.id;
 state.draft = null;
@@ -909,7 +1017,7 @@ return image?.objects.find((object) => object.type === "stainCount") || null;
 }
 function sessionStains(session, image = activeImage()) {
 if (!session || !image) return [];
-return image.objects.filter((object) => object.sessionId === session.id);
+return image.objects.filter((object) => object.sessionId === session.id && (object.type === "halfEllipse" || object.type === "ellipse"));
 }
 function stainSourceCounts(session, image = activeImage()) {
 let auto = 0, manual = 0;
@@ -952,18 +1060,18 @@ const el = document.createElementNS("http://www.w3.org/2000/svg", name);
 Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, String(value)));
 return el;
 }
-function stainChartPanel(title, caption, content) {
+function stainChartPanel(spec, index) {
 const panel = document.createElement("figure");
 panel.className = "stain-chart-panel";
 panel.tabIndex = 0;
 panel.setAttribute("role", "button");
-panel.setAttribute("aria-label", `Enlarge ${title}`);
+panel.setAttribute("aria-label", `Enlarge ${spec.title}`);
 const heading = document.createElement("h3");
-heading.textContent = title;
+heading.textContent = spec.title;
 const note = document.createElement("p");
-note.textContent = caption;
-panel.append(heading, content, note);
-const open = () => openStainChartViewer(title, caption, content);
+note.textContent = spec.caption;
+panel.append(heading, spec.node, note);
+const open = () => openStainChartViewerAt(index);
 panel.addEventListener("click", open);
 panel.addEventListener("keydown", (event) => {
 if (event.key === "Enter" || event.key === " ") {
@@ -1174,6 +1282,8 @@ wrap.append(img, svg);
 return wrap;
 }
 const stainChartViewerView = { x: 0, y: 0, scale: 1, drag: null };
+let stainChartViewerSpecs = [];
+let stainChartViewerIndex = 0;
 function applyStainChartViewerView() {
 const content = $("#stainChartViewerContent");
 if (!content) return;
@@ -1186,15 +1296,29 @@ stainChartViewerView.scale = 1;
 stainChartViewerView.drag = null;
 applyStainChartViewerView();
 }
-function openStainChartViewer(title, caption, content) {
+function openStainChartViewerAt(index) {
+if (!stainChartViewerSpecs.length) return;
+const count = stainChartViewerSpecs.length;
+stainChartViewerIndex = ((index % count) + count) % count;
+const spec = stainChartViewerSpecs[stainChartViewerIndex];
 const viewer = $("#stainChartViewer");
-$("#stainChartViewerTitle").textContent = title;
-$("#stainChartViewerCaption").textContent = caption;
+$("#stainChartViewerTitle").textContent = spec.title;
+$("#stainChartViewerCaption").textContent = spec.caption;
 const host = $("#stainChartViewerContent");
 host.innerHTML = "";
-host.append(content.cloneNode(true));
+host.append(spec.node.cloneNode(true));
 viewer.hidden = false;
+const prev = $("#stainChartViewerPrev");
+const next = $("#stainChartViewerNext");
+if (prev) prev.disabled = count < 2;
+if (next) next.disabled = count < 2;
+const counter = $("#stainChartViewerCounter");
+if (counter) counter.textContent = `${stainChartViewerIndex + 1} / ${count}`;
 resetStainChartViewerView();
+}
+function cycleStainChartViewer(delta) {
+if ($("#stainChartViewer")?.hidden || stainChartViewerSpecs.length < 2) return;
+openStainChartViewerAt(stainChartViewerIndex + delta);
 }
 function closeStainChartViewer() {
 const viewer = $("#stainChartViewer");
@@ -1223,6 +1347,7 @@ applyStainChartViewerView();
 }, { passive: false });
 stage.addEventListener("pointerdown", (event) => {
 if (event.button !== 0) return;
+if (event.target.closest(".stain-chart-nav")) return;
 stainChartViewerView.drag = { x: event.clientX - stainChartViewerView.x, y: event.clientY - stainChartViewerView.y };
 stage.classList.add("is-panning");
 stage.setPointerCapture(event.pointerId);
@@ -1239,6 +1364,14 @@ stage.classList.remove("is-panning");
 };
 stage.addEventListener("pointerup", endPan);
 stage.addEventListener("pointercancel", endPan);
+$("#stainChartViewerPrev")?.addEventListener("click", (event) => {
+event.stopPropagation();
+cycleStainChartViewer(-1);
+});
+$("#stainChartViewerNext")?.addEventListener("click", (event) => {
+event.stopPropagation();
+cycleStainChartViewer(1);
+});
 }
 function openStainChart(session) {
 fillStainChart(session);
@@ -1276,10 +1409,13 @@ gammaStats: numericStats(gammas),
 function stainChartSpecs(session, image = activeImage()) {
 const series = collectStainSeries(session, image);
 if (!series.stains.length) return [];
-const { stains, widths, alphas, gammas, widthStats, alphaStats } = series;
-const widthUnit = (pixels) => calibratedLength(pixels, image);
+const { stains, lengths, widths, alphas, gammas, lengthStats, widthStats, alphaStats } = series;
+const sizeUnit = (pixels) => calibratedLength(pixels, image);
 const widthMax = widthStats.max === widthStats.min ? widthStats.min + 1 : widthStats.max;
-const widthAxis = `Stain width (${image?.calibration?.units || "px"})`;
+const lengthMax = lengthStats.max === lengthStats.min ? lengthStats.min + 1 : lengthStats.max;
+const units = image?.calibration?.units || "px";
+const widthAxis = `Stain width (${units})`;
+const lengthAxis = `Stain length (${units})`;
 return [
 {
 title: "Impact angle",
@@ -1304,7 +1440,7 @@ max: widthMax,
 bins: Math.min(10, Math.max(5, Math.ceil(Math.sqrt(widths.length)))),
 mean: widthStats.mean,
 median: widthStats.median,
-formatTick: (value) => widthUnit(value),
+formatTick: (value) => sizeUnit(value),
 xLabel: widthAxis,
 yLabel: "Number of stains",
 }),
@@ -1322,9 +1458,23 @@ xMin: widthStats.min,
 xMax: widthMax,
 yMin: 0,
 yMax: 90,
-formatX: (value) => widthUnit(value),
+formatX: (value) => sizeUnit(value),
 formatY: (value) => `${value.toFixed(0)}°`,
 xLabel: widthAxis,
+yLabel: "Impact angle α (°)",
+}),
+},
+{
+title: "Length vs impact angle",
+caption: "Each stain is a point. Longer stains often sit lower (more glancing); short-and-steep sits left and high.",
+node: scatterSvg(lengths, alphas, {
+xMin: lengthStats.min,
+xMax: lengthMax,
+yMin: 0,
+yMax: 90,
+formatX: (value) => sizeUnit(value),
+formatY: (value) => `${value.toFixed(0)}°`,
+xLabel: lengthAxis,
 yLabel: "Impact angle α (°)",
 }),
 },
@@ -1417,8 +1567,9 @@ item.innerHTML = `<span>${label}</span><strong></strong>`;
 item.querySelector("strong").textContent = value;
 summary.append(item);
 });
-stainChartSpecs(session, image).forEach((spec) => {
-graphs.append(stainChartPanel(spec.title, spec.caption, spec.node));
+stainChartViewerSpecs = stainChartSpecs(session, image);
+stainChartViewerSpecs.forEach((spec, index) => {
+graphs.append(stainChartPanel(spec, index));
 });
 }
 function isSessionStain(object) {
@@ -1432,11 +1583,11 @@ if (parent?.visible === false) return false;
 }
 return true;
 }
-function ensureStainSession(image = activeImage()) {
+function ensureStainSession(image = activeImage(), { record = true } = {}) {
 if (!image) return null;
 let session = stainSession(image);
 if (session) return session;
-recordHistory();
+if (record) recordHistory();
 session = makeObject("stainCount", {
 stainColor: null,
 stainColorLight: null,
@@ -1456,6 +1607,17 @@ seedCenters: [],
 image.objects.push(session);
 return session;
 }
+function adoptOrphanStains(image = activeImage()) {
+if (!image) return;
+const orphans = image.objects.filter((object) => (object.type === "halfEllipse" || object.type === "ellipse") && !object.sessionId);
+if (!orphans.length) return;
+const session = ensureStainSession(image, { record: false });
+orphans.forEach((object) => {
+object.sessionId = session.id;
+if (!object.source) object.source = "manual";
+});
+renumberStains(session, image);
+}
 function setStainMode(mode) {
 state.stainMode = mode;
 state.draft = null;
@@ -1465,7 +1627,7 @@ draw();
 const stainWizardSteps = [
 {
 id: "stainColor",
-title: "Sample stain color",
+title: "Sample darkest color of stain",
 copy: "Click a typical stain body — the darker, well-formed part, not the washed tail.",
 waiting: "Click the image to sample.",
 mode: "stainColor",
@@ -1475,7 +1637,7 @@ status: (session) => session?.stainColor,
 },
 {
 id: "stainColorLight",
-title: "Sample a lighter stain",
+title: "Sample lightest color of stain",
 copy: "Click a lighter or wetter part of a stain body — still the round body, not the tail. Skip if the stains are even in color.",
 waiting: "Click the image to sample.",
 mode: "stainColorLight",
@@ -1485,7 +1647,7 @@ status: (session) => session?.stainColorLight,
 },
 {
 id: "backgroundColor",
-title: "Sample background",
+title: "Sample the stain background",
 copy: "Click the surface next to the stains (paint, tile, drywall). Detection is “closer to stain than to this color.”",
 waiting: "Click the image to sample.",
 mode: "backgroundColor",
@@ -1495,7 +1657,7 @@ status: (session) => session?.backgroundColor,
 },
 {
 id: "smallSize",
-title: "Sample a small stain",
+title: "Sample length of shortest stain",
 copy: "Drag across one of the smaller stains you want counted. That sets the minimum size.",
 waiting: "Drag across a small stain.",
 mode: "smallSize",
@@ -1505,7 +1667,7 @@ status: (session) => formatStainSampleSize(session?.smallSize),
 },
 {
 id: "largeSize",
-title: "Sample a large stain",
+title: "Sample length of longest stain",
 copy: "Drag across one of the larger stains. That sets the maximum size.",
 waiting: "Drag across a large stain.",
 mode: "largeSize",
@@ -1515,8 +1677,8 @@ status: (session) => formatStainSampleSize(session?.largeSize),
 },
 {
 id: "direction",
-title: "General Stain Direction",
-copy: "Drag in the direction the stains were traveling — toward the tails. The start of the arrow is the leading edge. After you place centers and arrows, Fit keeps each ellipse near that arrow (tolerance is in Settings).",
+title: "Mark the general stain direction",
+copy: "Drag toward the tails. The mask sets each stain’s long-axis; this arrow chooses which way along that axis (toward the tail).",
 waiting: "Drag an arrow on the image.",
 mode: "stainDirection",
 required: true,
@@ -1535,21 +1697,22 @@ status: (session) => session?.detectRegion?.length >= 3 ? "Search area set." : "
 },
 {
 id: "exclude",
-title: "Exclude areas (optional)",
-copy: "Draw around scale bars, labels, or other objects to skip. Right-click to close. Skip if nothing needs excluding.",
+title: "Draw exclusion areas",
+copy: "Draw around scale bars, labels, or other objects to skip. You can draw several regions. Right-click to close each one, then click Next when finished. Skip if nothing needs excluding.",
 waiting: "Click points around an area to skip.",
 mode: "exclude",
 optional: true,
-done: (session) => (session?.excludeRegions || []).length > 0,
+stayInMode: true,
+done: () => false,
 status: (session) => {
 const count = (session?.excludeRegions || []).length;
-return count ? `${count} exclude region${count === 1 ? "" : "s"}.` : "";
+return count ? `${count} exclude region${count === 1 ? "" : "s"} drawn. Click Next when ready.` : "";
 },
 },
 {
 id: "detectRun",
-title: "Assisted detect",
-copy: "This is assisted, not fully automatic. Tune the live mask, find body centers, drag a center or its travel arrow if needed, then Fit Ellipses.",
+title: "Assisted stain detection",
+copy: "Tune the live mask, then Find Centers. Arrows use the mask long-axis with polarity from your general direction; red means near-circular (α > 80°) — inspect those. Fit Ellipses, then Switch to Manual if required.",
 waiting: "",
 mode: null,
 required: false,
@@ -1579,6 +1742,22 @@ state.stainWizardOpen = false;
 const panel = $("#stainWizard");
 if (panel?.open) panel.close();
 }
+function cancelStainWizard() {
+const image = activeImage();
+const session = stainSession(image);
+if (image && session) {
+recordHistory();
+image.objects = image.objects.filter((object) => object.id !== session.id && object.sessionId !== session.id);
+}
+state.stainMode = null;
+state.draft = null;
+state.selectedObjectId = null;
+state.selectedSeedId = null;
+state.stainWizardIndex = 0;
+closeStainWizard();
+setTool("select");
+refreshUI();
+}
 function goStainWizardStep(index) {
 state.stainWizardIndex = Math.max(0, Math.min(stainWizardSteps.length - 1, index));
 state.stainWizardOpen = true;
@@ -1594,6 +1773,10 @@ function advanceStainWizardIfDone() {
 if (!state.stainWizardOpen) return;
 const session = stainSession();
 const step = stainWizardSteps[state.stainWizardIndex];
+if (step?.stayInMode) {
+renderStainWizard();
+return;
+}
 if (step?.done?.(session) && state.stainWizardIndex < stainWizardSteps.length - 1) goStainWizardStep(state.stainWizardIndex + 1);
 else renderStainWizard();
 }
@@ -1642,11 +1825,18 @@ extra.append(sessionButton("Find Centers", autoDetectStains));
 const fitBtn = sessionButton("Fit Ellipses", fitEllipsesFromCenters);
 fitBtn.dataset.fitEllipses = "1";
 extra.append(fitBtn);
-extra.append(sessionButton("Switch to Manual", () => { enterManualStains(); setTool("stainCount"); }));
+const modeToggle = sessionButton("Switch to Manual", () => {
+if (state.stainVariant === "manual") enterAssistedFromWizard();
+else enterManualStains();
+});
+modeToggle.dataset.manualToggle = "1";
+extra.append(modeToggle);
 extra.append(Object.assign(document.createElement("p"), { className: "session-note", id: "stainWizardCount" }));
 }
 const fitBtn = extra.querySelector("[data-fit-ellipses]");
 if (fitBtn) fitBtn.disabled = !(session.seedCenters || []).length;
+const modeToggle = extra.querySelector("[data-manual-toggle]");
+if (modeToggle) modeToggle.textContent = state.stainVariant === "manual" ? "Switch to Assisted" : "Switch to Manual";
 const note = $("#stainWizardCount");
 if (note) {
 const seeds = (session.seedCenters || []).length;
@@ -1678,14 +1868,21 @@ goStainWizardStep(state.stainWizardIndex + 1);
 }
 function applyStainWizardPosition() {
 const panel = $("#stainWizard");
-if (!panel || !state.stainWizardPos) return;
-const width = panel.offsetWidth || 300;
-const height = panel.offsetHeight || 200;
+if (!panel) return;
+const width = panel.offsetWidth || 320;
+const height = panel.offsetHeight || 520;
+if (!state.stainWizardPos) {
+state.stainWizardPos = {
+left: Math.max(16, window.innerWidth - width - 24),
+top: 78,
+};
+}
 const left = Math.max(0, Math.min(window.innerWidth - width, state.stainWizardPos.left));
 const top = Math.max(0, Math.min(window.innerHeight - height, state.stainWizardPos.top));
 state.stainWizardPos = { left, top };
 panel.style.left = `${left}px`;
 panel.style.top = `${top}px`;
+panel.style.right = "auto";
 }
 function bindStainWizardDrag() {
 const panel = $("#stainWizard");
@@ -1820,20 +2017,15 @@ if (isStainPixel(rgb, stains, background, session.separation)) mask[y * width + 
 }
 }
 filterStainMask(mask, width, height, scale, session);
-const overlayScale = Math.min(1, 1400 / Math.max(width, height));
-const overlayWidth = Math.max(1, Math.round(width * overlayScale));
-const overlayHeight = Math.max(1, Math.round(height * overlayScale));
 const overlay = document.createElement("canvas");
-overlay.width = overlayWidth;
-overlay.height = overlayHeight;
+overlay.width = width;
+overlay.height = height;
 const overlayCtx = overlay.getContext("2d");
-const overlayData = overlayCtx.createImageData(overlayWidth, overlayHeight);
-for (let y = 0; y < overlayHeight; y++) {
-const my = overlayScale === 1 ? y : Math.min(height - 1, Math.round(y / overlayScale));
-for (let x = 0; x < overlayWidth; x++) {
-const mx = overlayScale === 1 ? x : Math.min(width - 1, Math.round(x / overlayScale));
-if (!mask[my * width + mx]) continue;
-const i = (y * overlayWidth + x) * 4;
+const overlayData = overlayCtx.createImageData(width, height);
+for (let y = 0; y < height; y++) {
+for (let x = 0; x < width; x++) {
+if (!mask[y * width + x]) continue;
+const i = (y * width + x) * 4;
 overlayData.data[i] = 25;
 overlayData.data[i + 1] = 201;
 overlayData.data[i + 2] = 210;
@@ -1882,12 +2074,14 @@ function drawSeedCenters(drawCtx, image, zoom) {
 const session = stainSession(image);
 const seeds = session?.seedCenters || [];
 if (!seeds.length) return;
-const hasDir = Number.isFinite(session.direction);
 seeds.forEach((seed) => {
 const selected = seed.id === state.selectedSeedId;
 const radius = (selected ? 6 : 5) / zoom;
-if (hasDir) {
-const angle = seedTravelAngle(seed, session);
+const angle = Number.isFinite(seed.direction)
+? seed.direction
+: (Number.isFinite(session.direction) ? session.direction : null);
+const accent = seed.directionUncertain ? "#e06a6a" : "#f09a35";
+if (Number.isFinite(angle)) {
 const start = (radius + 1.5 / zoom);
 const length = 66 / zoom;
 const tipX = seed.x + Math.cos(angle) * length;
@@ -1900,19 +2094,19 @@ drawCtx.lineTo(tipX + Math.cos(angle + 2.6) * head, tipY + Math.sin(angle + 2.6)
 drawCtx.moveTo(tipX, tipY);
 drawCtx.lineTo(tipX + Math.cos(angle - 2.6) * head, tipY + Math.sin(angle - 2.6) * head);
 drawCtx.lineWidth = (selected ? 2 : 1.5) / zoom;
-drawCtx.strokeStyle = "#f09a35";
+drawCtx.strokeStyle = accent;
 drawCtx.stroke();
 drawCtx.beginPath();
 drawCtx.arc(tipX, tipY, (selected ? 4.5 : 3.5) / zoom, 0, Math.PI * 2);
-drawCtx.fillStyle = selected ? "#f09a35" : "#0b2238";
+drawCtx.fillStyle = selected ? accent : "#0b2238";
 drawCtx.fill();
 drawCtx.lineWidth = 1.2 / zoom;
-drawCtx.strokeStyle = selected ? "#0b2238" : "#f09a35";
+drawCtx.strokeStyle = selected ? "#0b2238" : accent;
 drawCtx.stroke();
 }
 drawCtx.beginPath();
 drawCtx.arc(seed.x, seed.y, radius, 0, Math.PI * 2);
-drawCtx.fillStyle = "#f09a35";
+drawCtx.fillStyle = accent;
 drawCtx.fill();
 drawCtx.lineWidth = 1.5 / zoom;
 drawCtx.strokeStyle = "#0b2238";
@@ -2297,6 +2491,38 @@ function seedTravelAngle(seed, session = stainSession()) {
 if (Number.isFinite(seed?.direction)) return seed.direction;
 return Number.isFinite(session?.direction) ? session.direction : 0;
 }
+const STAIN_DIRECTION_UNCERTAIN_ALPHA_DEG = 80;
+function alignTravelToGuide(maskTravel, guideTravel) {
+if (!Number.isFinite(maskTravel)) return guideTravel;
+if (!Number.isFinite(guideTravel)) return maskTravel;
+const flipped = maskTravel + Math.PI;
+return Math.abs(shortestAngleDelta(maskTravel, guideTravel)) <= Math.abs(shortestAngleDelta(flipped, guideTravel))
+? maskTravel
+: flipped;
+}
+function assignSeedDirectionFromMask(seed, session = stainSession(), image = activeImage(), built = null, blobs = null) {
+if (!seed || !image) return seed;
+const mask = built || buildStainMask(image, session);
+if (!mask) {
+seed.directionUncertain = true;
+if (Number.isFinite(session?.direction)) seed.direction = session.direction;
+return seed;
+}
+const components = blobs || connectedComponents(mask.mask, mask.width, mask.height);
+const pixels = pixelsForSeed(seed, mask, components);
+if (!pixels?.length || pixels.length < 6) {
+seed.directionUncertain = true;
+if (Number.isFinite(session?.direction)) seed.direction = session.direction;
+return seed;
+}
+const axis = leadingAxisFromCenter(seed.x, seed.y, pixels);
+const maskTravel = Math.atan2(-axis.uy, -axis.ux);
+seed.direction = alignTravelToGuide(maskTravel, session?.direction);
+const alphaEst = Math.asin(Math.min(1, 1 / Math.max(axis.aspect || 1, 1))) * 180 / Math.PI;
+seed.directionAlphaEst = alphaEst;
+seed.directionUncertain = alphaEst > STAIN_DIRECTION_UNCERTAIN_ALPHA_DEG;
+return seed;
+}
 function seedVectorTip(seed, session, zoom) {
 const angle = seedTravelAngle(seed, session);
 const length = 66 / zoom;
@@ -2304,11 +2530,12 @@ return { x: seed.x + Math.cos(angle) * length, y: seed.y + Math.sin(angle) * len
 }
 function hitSeedVectorTip(point, image = activeImage()) {
 const session = stainSession(image);
-if (!session || !Number.isFinite(session.direction) || !image) return null;
+if (!session || !image) return null;
 const zoom = image.view.zoom;
 const threshold = 10 / zoom;
 let best = null, bestDist = threshold;
 for (const seed of sessionSeeds(session)) {
+if (!Number.isFinite(seed.direction) && !Number.isFinite(session.direction)) continue;
 const d = distance(point, seedVectorTip(seed, session, zoom));
 if (d <= bestDist) {
 best = seed;
@@ -2362,9 +2589,10 @@ function addSeedCenter(point, source = "manual") {
 recordHistory();
 const session = ensureStainSession();
 const seeds = sessionSeeds(session);
-const seed = { id: uid("seed"), x: point.x, y: point.y, source, direction: stainSession()?.direction };
+const seed = { id: uid("seed"), x: point.x, y: point.y, source, direction: null, directionUncertain: false };
 seeds.push(seed);
 state.selectedSeedId = seed.id;
+assignSeedDirectionFromMask(seed, session);
 return seed;
 }
 function removeSeedCenter(seed) {
@@ -2379,7 +2607,10 @@ function enterCenterReview(count) {
 state.stainMode = "centers";
 state.draft = null;
 state.selectedObjectId = stainSession()?.id || state.selectedObjectId;
-updateHint(count ? "Drag a center to place it. Drag the arrow tip to set travel toward the tail. Click a cyan stain to add a center. Right-click or Delete to remove." : "No centers yet. Click a cyan stain to add a center on the round body, then Fit Ellipses.");
+const uncertain = sessionSeeds(stainSession()).filter((seed) => seed.directionUncertain).length;
+updateHint(count
+? `Drag a center to place it. Arrows follow the mask long-axis${uncertain ? ` · ${uncertain} red (α > 80°) need inspection` : ""}. Drag a tip to override, or press F to flip. Click a cyan stain to add a center. Right-click or Delete to remove.`
+: "No centers yet. Click a cyan stain to add a center on the round body, then Fit Ellipses.");
 refreshUI();
 }
 function localMaskPixels(built, x, y, radius = 28) {
@@ -2431,9 +2662,9 @@ return localMaskPixels(built, seed.x, seed.y);
 }
 function leadingAxisFromCenter(cx, cy, pixels, preferredAngle) {
 if (Number.isFinite(preferredAngle)) {
-return { ux: -Math.cos(preferredAngle), uy: -Math.sin(preferredAngle) };
+return { ux: -Math.cos(preferredAngle), uy: -Math.sin(preferredAngle), aspect: 1 };
 }
-if (pixels.length < 6) return { ux: 1, uy: 0 };
+if (pixels.length < 6) return { ux: 1, uy: 0, aspect: 1 };
 let mx = 0, my = 0;
 for (const point of pixels) { mx += point.x; my += point.y; }
 mx /= pixels.length;
@@ -2463,7 +2694,87 @@ if (widthToward(1) < widthToward(-1)) {
 ux = -ux;
 uy = -uy;
 }
-return { ux, uy };
+let tMin = Infinity, tMax = -Infinity, sMin = Infinity, sMax = -Infinity;
+for (const point of pixels) {
+const t = (point.x - cx) * ux + (point.y - cy) * uy;
+const s = (point.x - cx) * -uy + (point.y - cy) * ux;
+tMin = Math.min(tMin, t);
+tMax = Math.max(tMax, t);
+sMin = Math.min(sMin, s);
+sMax = Math.max(sMax, s);
+}
+const lengthExtent = Math.max(1e-6, tMax - tMin);
+const widthExtent = Math.max(1e-6, sMax - sMin);
+const aspect = Math.max(1, lengthExtent / widthExtent);
+return { ux, uy, aspect };
+}
+const STAIN_ASPECT_CONFIDENCE_LO = 1.2;
+const STAIN_ASPECT_CONFIDENCE_HI = 2.0;
+function elongationConfidence(aspect) {
+if (!(aspect > 0)) return 0;
+if (aspect <= STAIN_ASPECT_CONFIDENCE_LO) return 0;
+if (aspect >= STAIN_ASPECT_CONFIDENCE_HI) return 1;
+return (aspect - STAIN_ASPECT_CONFIDENCE_LO) / (STAIN_ASPECT_CONFIDENCE_HI - STAIN_ASPECT_CONFIDENCE_LO);
+}
+function adaptiveTravelSearchBand(baseBand, confidence) {
+const c = Math.max(0, Math.min(1, confidence));
+const wide = Math.max(25 * Math.PI / 180, baseBand * 8);
+const tight = Math.max(baseBand, 4 * Math.PI / 180);
+return wide + (tight - wide) * c;
+}
+function resolveAndScoreTravel(seed, session, cx, cy, pixels) {
+const baseBand = stainDirectionBandRad();
+const guide = Number.isFinite(session?.direction)
+? session.direction
+: (Number.isFinite(seed?.direction) ? seed.direction : null);
+const fallback = Number.isFinite(seed?.direction) ? seed.direction : (Number.isFinite(guide) ? guide : 0);
+if (!pixels?.length || pixels.length < 6) {
+return {
+travel: fallback,
+band: baseBand,
+fitted: fitHalfAlongTravel(cx, cy, pixels || [], fallback, session),
+};
+}
+const axis = leadingAxisFromCenter(cx, cy, pixels);
+const maskTravel = alignTravelToGuide(Math.atan2(-axis.uy, -axis.ux), guide);
+const confidence = elongationConfidence(axis.aspect);
+const preferred = maskTravel;
+const searchBand = adaptiveTravelSearchBand(baseBand, confidence);
+const step = stainDirectionStepRad(Math.max(searchBand, baseBand || 1e-6));
+const blobSet = new Set(pixels.map((point) => `${Math.round(point.x)},${Math.round(point.y)}`));
+const angles = [];
+const seen = new Set();
+const pushAngle = (angle) => {
+const key = Math.round(normalizeAngle(angle) * 1000);
+if (seen.has(key)) return;
+seen.add(key);
+angles.push(angle);
+};
+for (let delta = -searchBand; delta <= searchBand + 1e-9; delta += Math.max(step, 1e-6)) {
+pushAngle(preferred + delta);
+}
+pushAngle(maskTravel);
+if (Number.isFinite(seed?.direction)) pushAngle(seed.direction);
+if (Number.isFinite(guide)) pushAngle(guide);
+let best = null;
+let bestScore = -Infinity;
+let bestTravel = preferred;
+for (const theta of angles) {
+const fitted = fitHalfAlongTravel(cx, cy, pixels, theta, session);
+let score = halfEllipseScore(fitted.geometry, fitted.body, blobSet, fitted.tail);
+score += 0.12 * Math.cos(shortestAngleDelta(theta, maskTravel));
+if (Number.isFinite(guide)) score += 0.06 * Math.cos(shortestAngleDelta(theta, guide));
+if (score > bestScore) {
+bestScore = score;
+best = fitted;
+bestTravel = theta;
+}
+}
+return {
+travel: bestTravel,
+band: baseBand,
+fitted: best || fitHalfAlongTravel(cx, cy, pixels, preferred, session),
+};
 }
 function bodyAndTailPixels(cx, cy, pixels, ux, uy) {
 const body = [];
@@ -2592,9 +2903,11 @@ id: uid("seed"),
 x: peak.x / built.scale,
 y: peak.y / built.scale,
 source: "auto",
-direction: session.direction,
+direction: null,
+directionUncertain: false,
 });
 }
+for (const seed of seeds) assignSeedDirectionFromMask(seed, session, image, built, blobs);
 session.seedCenters = seeds;
 state.selectedSeedId = seeds[0]?.id || null;
 image.objects = image.objects.filter((object) => !(object.sessionId === session.id && (object.source === "auto" || object.fromSeed)));
@@ -2615,15 +2928,14 @@ const blobs = connectedComponents(built.mask, built.width, built.height);
 image.objects = image.objects.filter((object) => !(object.sessionId === session.id && (object.source === "auto" || object.fromSeed)));
 for (const seed of seeds) {
 const pixels = pixelsForSeed(seed, built, blobs);
-const travel = seedTravelAngle(seed, session);
-const band = stainDirectionBandRad();
-const fitted = fitHalfFromCenter(seed.x, seed.y, pixels, travel, session);
+const resolved = resolveAndScoreTravel(seed, session, seed.x, seed.y, pixels);
+const fitted = resolved.fitted;
 const next = fitted.body.length
 ? refineHalfEllipse(fitted.geometry, fitted.body, {
 fromCenter: true,
 tailPixels: fitted.tail,
-preferredTravel: Number.isFinite(travel) ? travel : undefined,
-directionBand: band,
+preferredTravel: Number.isFinite(resolved.travel) ? resolved.travel : undefined,
+directionBand: resolved.band,
 })
 : fitted.geometry;
 addStain(session, next, seed.source === "manual" ? "manual" : "auto", { fromSeed: true });
@@ -2682,10 +2994,18 @@ draw();
 return;
 }
 recordHistory();
-if (state.draft.type === "stainDetect") session.detectRegion = points;
-if (state.draft.type === "stainExclude") session.excludeRegions = [...(session.excludeRegions || []), points];
+const draftType = state.draft.type;
+if (draftType === "stainDetect") session.detectRegion = points;
+if (draftType === "stainExclude") session.excludeRegions = [...(session.excludeRegions || []), points];
 invalidateStainMask(session);
 state.draft = null;
+const step = stainWizardSteps[state.stainWizardIndex];
+if (draftType === "stainExclude" && state.stainWizardOpen && step?.id === "exclude") {
+state.stainMode = "exclude";
+refreshUI();
+renderStainWizard();
+return;
+}
 state.stainMode = null;
 refreshUI();
 advanceStainWizardIfDone();
@@ -2884,12 +3204,8 @@ return;
 }
 if (["polyline", "polygon"].includes(state.tool)) {
 if (!state.draft) state.draft = { type: state.tool, points: [point], current: point };
-else if (nearFirstPoint(point, image)) {
-if (state.tool === "polyline") {
-completeObject(makeObject("polyline", { points: state.draft.points.slice(), closed: true }));
-return;
-}
-askClosePolygon();
+else if (state.tool === "polygon" && nearFirstPoint(point, image)) {
+finishPolygonIfPossible();
 return;
 } else state.draft.points.push(point);
 draw();
@@ -2912,7 +3228,10 @@ state.dragging.seed.x = state.dragging.origin.x + point.x - state.dragging.start
 state.dragging.seed.y = state.dragging.origin.y + point.y - state.dragging.start.y;
 } else if (state.dragging.mode === "seed-direction") {
 const seed = state.dragging.seed;
-if (distance(point, seed) > 2) seed.direction = Math.atan2(point.y - seed.y, point.x - seed.x);
+if (distance(point, seed) > 2) {
+seed.direction = Math.atan2(point.y - seed.y, point.x - seed.x);
+seed.directionUncertain = false;
+}
 } else if (state.dragging.mode === "vertex") {
 setVertexPoint(state.dragging.object, state.dragging.vertex, { x: point.x, y: point.y });
 renderMeasurements();
@@ -2927,7 +3246,7 @@ return;
 }
 if (state.draft) {
 state.draft.current = point;
-state.draft.closeCandidate = nearFirstPoint(point, image);
+state.draft.closeCandidate = state.draft.type === "polygon" && nearFirstPoint(point, image);
 draw();
 return;
 }
@@ -3053,17 +3372,6 @@ state.draft = null;
 setTool("select");
 refreshUI();
 }
-}
-function askClosePolygon() {
-if (state.draft?.type !== "polygon" || state.draft.points.length < 3) return;
-const dialog = $("#closePolygonDialog");
-const onClose = () => {
-dialog.removeEventListener("close", onClose);
-if (dialog.returnValue === "close") finishPolygonIfPossible();
-};
-dialog.returnValue = "keep";
-dialog.addEventListener("close", onClose);
-dialog.showModal();
 }
 function translateObject(object, snapshot, dx, dy) {
 const move = (point) => ({ x: point.x + dx, y: point.y + dy });
@@ -3212,7 +3520,7 @@ draw();
 function refreshUI() {
 const image = activeImage();
 $("#emptyState").hidden = Boolean(image) || state.projectStarted;
-["#exportImageBtn", "#exportCsvBtn", "#exportPdfBtn", "#fitCanvasBtn"].forEach((selector) => $(selector).disabled = !image);
+["#exportImageBtn", "#exportCsvBtn", "#exportMeasurementsCsvBtn", "#exportPdfBtn", "#fitCanvasBtn"].forEach((selector) => $(selector).disabled = !image);
 renderFilmstrip();
 renderStructure();
 renderProperties();
@@ -3246,21 +3554,20 @@ const image = activeImage();
 $("#structureList").innerHTML = "";
 $("#structureEmpty").hidden = Boolean(image);
 if (!image) return;
+adoptOrphanStains(image);
 const imageRow = document.createElement("div");
 imageRow.className = "structure-item image-row";
 imageRow.innerHTML = `<span class="structure-icon"><img alt=""></span><span class="name"></span>`;
 imageRow.querySelector("img").src = image.element.src;
 imageRow.querySelector(".name").textContent = image.name;
 $("#structureList").appendChild(imageRow);
-const collapsedSessions = new Set(image.objects.filter((item) => item.type === "stainCount" && item.structureCollapsed).map((item) => item.id));
-image.objects.forEach((object) => {
-if (object.sessionId && collapsedSessions.has(object.sessionId)) return;
+const appendObjectRow = (object, { child = false } = {}) => {
 const hidden = object.visible === false;
 const row = document.createElement("div");
-row.className = `structure-item${object.id === state.selectedObjectId ? " selected" : ""}${object.sessionId ? " child" : ""}${hidden ? " hidden-object" : ""}${object.structureCollapsed ? " collapsed" : ""}`;
+row.className = `structure-item${object.id === state.selectedObjectId ? " selected" : ""}${child || object.sessionId ? " child" : ""}${hidden ? " hidden-object" : ""}${object.structureCollapsed ? " collapsed" : ""}`;
 row.dataset.id = object.id;
 row.innerHTML = `<span class="structure-icon">${structureIcon(object)}</span><span class="name"></span>`;
-const childCount = object.type === "stainCount" ? image.objects.filter((item) => item.sessionId === object.id).length : 0;
+const childCount = object.type === "stainCount" ? sessionStains(object, image).length : 0;
 row.querySelector(".name").textContent = object.type === "stainCount" && object.structureCollapsed && childCount
 ? `${object.name} (${childCount})`
 : object.name;
@@ -3301,6 +3608,15 @@ draw();
 });
 row.append(eye);
 $("#structureList").appendChild(row);
+};
+image.objects.forEach((object) => {
+if (object.type === "stainCount" || object.sessionId) return;
+appendObjectRow(object);
+});
+image.objects.filter((object) => object.type === "stainCount").forEach((session) => {
+appendObjectRow(session);
+if (session.structureCollapsed) return;
+sessionStains(session, image).forEach((stain) => appendObjectRow(stain, { child: true }));
 });
 }
 const EYE_OPEN_ICON = `<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>`;
@@ -3613,6 +3929,18 @@ object.source || "",
 ]);
 }));
 const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n");
+saveBlob(new Blob([csv], { type: "text/csv" }), `${safeName(state.project.name)}-csv-report.csv`, [
+{ description: "CSV spreadsheet", accept: { "text/csv": [".csv"] } },
+]);
+}
+function exportMeasurementsCsv() {
+const rows = [["Image", "Name", "Type", "Value"]];
+state.project.images.forEach((image) => {
+image.objects.forEach((object) => {
+rows.push([image.name, object.name, object.type, objectValue(object, image)]);
+});
+});
+const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n");
 saveBlob(new Blob([csv], { type: "text/csv" }), `${safeName(state.project.name)}-measurements.csv`, [
 { description: "CSV spreadsheet", accept: { "text/csv": [".csv"] } },
 ]);
@@ -3909,6 +4237,17 @@ tolerance.value = state.prefs.assisted.directionToleranceDeg;
 savePrefs();
 });
 row.append(settingsField("Ellipse angle fit (±°)", tolerance));
+const numberColor = Object.assign(document.createElement("input"), {
+type: "color",
+value: stainNumberColor(),
+});
+numberColor.addEventListener("input", () => {
+if (!state.prefs.assisted) state.prefs.assisted = { ...defaultPrefs.assisted };
+state.prefs.assisted.stainNumberColor = numberColor.value;
+savePrefs();
+draw();
+});
+row.append(settingsField("Stain number color", numberColor));
 assisted.appendChild(row);
 }
 }
@@ -3952,7 +4291,98 @@ const collapsed = workspace.classList.toggle(className);
 button.textContent = isLeft ? (collapsed ? "›" : "‹") : (collapsed ? "‹" : "›");
 button.setAttribute("aria-expanded", String(!collapsed));
 button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${isLeft ? "Structure and Properties" : "Project panel"}`);
+applyPanelWidths();
 requestAnimationFrame(resizeCanvas);
+}
+const PANEL_WIDTH_MIN = { left: 180, right: 200 };
+const PANEL_WIDTH_MAX = { left: 520, right: 520 };
+function panelWidthPrefs() {
+if (!state.prefs.layout) state.prefs.layout = { ...defaultPrefs.layout };
+return state.prefs.layout;
+}
+function clampPanelWidth(side, width) {
+const min = PANEL_WIDTH_MIN[side];
+const max = PANEL_WIDTH_MAX[side];
+return Math.max(min, Math.min(max, Math.round(width)));
+}
+function applyPanelWidths() {
+const workspace = $(".workspace");
+if (!workspace) return;
+const layout = panelWidthPrefs();
+const left = clampPanelWidth("left", Number(layout.leftPanelWidth) || defaultPrefs.layout.leftPanelWidth);
+const right = clampPanelWidth("right", Number(layout.rightPanelWidth) || defaultPrefs.layout.rightPanelWidth);
+layout.leftPanelWidth = left;
+layout.rightPanelWidth = right;
+if (!workspace.classList.contains("left-collapsed")) {
+workspace.style.setProperty("--left-panel-width", `${left}px`);
+} else {
+workspace.style.removeProperty("--left-panel-width");
+}
+if (!workspace.classList.contains("right-collapsed")) {
+workspace.style.setProperty("--right-panel-width", `${right}px`);
+} else {
+workspace.style.removeProperty("--right-panel-width");
+}
+}
+function bindPanelResizers() {
+const workspace = $(".workspace");
+if (!workspace) return;
+let drag = null;
+const onMove = (event) => {
+if (!drag) return;
+const layout = panelWidthPrefs();
+if (drag.side === "left") {
+layout.leftPanelWidth = clampPanelWidth("left", drag.startWidth + (event.clientX - drag.startX));
+} else {
+layout.rightPanelWidth = clampPanelWidth("right", drag.startWidth - (event.clientX - drag.startX));
+}
+applyPanelWidths();
+resizeCanvas();
+};
+const onUp = () => {
+if (!drag) return;
+drag = null;
+workspace.classList.remove("resizing");
+window.removeEventListener("pointermove", onMove);
+window.removeEventListener("pointerup", onUp);
+savePrefs();
+resizeCanvas();
+};
+$$(".panel-resize").forEach((handle) => {
+handle.addEventListener("pointerdown", (event) => {
+if (event.button !== 0) return;
+const side = handle.dataset.side === "right" ? "right" : "left";
+if (side === "left" && workspace.classList.contains("left-collapsed")) return;
+if (side === "right" && workspace.classList.contains("right-collapsed")) return;
+event.preventDefault();
+const layout = panelWidthPrefs();
+drag = {
+side,
+startX: event.clientX,
+startWidth: side === "left" ? layout.leftPanelWidth : layout.rightPanelWidth,
+};
+workspace.classList.add("resizing");
+window.addEventListener("pointermove", onMove);
+window.addEventListener("pointerup", onUp);
+});
+handle.addEventListener("keydown", (event) => {
+const side = handle.dataset.side === "right" ? "right" : "left";
+if (side === "left" && workspace.classList.contains("left-collapsed")) return;
+if (side === "right" && workspace.classList.contains("right-collapsed")) return;
+const step = event.shiftKey ? 24 : 12;
+let delta = 0;
+if (event.key === "ArrowLeft") delta = side === "left" ? -step : step;
+if (event.key === "ArrowRight") delta = side === "left" ? step : -step;
+if (!delta) return;
+event.preventDefault();
+const layout = panelWidthPrefs();
+if (side === "left") layout.leftPanelWidth = clampPanelWidth("left", layout.leftPanelWidth + delta);
+else layout.rightPanelWidth = clampPanelWidth("right", layout.rightPanelWidth + delta);
+applyPanelWidths();
+savePrefs();
+resizeCanvas();
+});
+});
 }
 function safeName(value) { return String(value || "project").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "project"; }
 function stripExtension(value) { return value.replace(/\.[^.]+$/, ""); }
@@ -4077,6 +4507,16 @@ event.preventDefault();
 closeStainChartViewer();
 }
 });
+$("#stainChartDialog").addEventListener("keydown", (event) => {
+if ($("#stainChartViewer")?.hidden) return;
+if (event.key === "ArrowLeft") {
+event.preventDefault();
+cycleStainChartViewer(-1);
+} else if (event.key === "ArrowRight") {
+event.preventDefault();
+cycleStainChartViewer(1);
+}
+});
 bindStainChartViewer();
 $("#resetSettingsBtn").addEventListener("click", resetSettings);
 $("#imageInput").addEventListener("change", (event) => { addImageFiles(event.target.files); event.target.value = ""; });
@@ -4088,6 +4528,7 @@ $("#projectInput").addEventListener("change", (event) => { if (event.target.file
 $("#saveProjectBtn").addEventListener("click", () => { closeFileMenu(); saveProject(); });
 $("#exportImageBtn").addEventListener("click", () => { closeFileMenu(); exportCurrentImage(); });
 $("#exportCsvBtn").addEventListener("click", () => { closeFileMenu(); exportCsv(); });
+$("#exportMeasurementsCsvBtn").addEventListener("click", () => { closeFileMenu(); exportMeasurementsCsv(); });
 $("#exportPdfBtn").addEventListener("click", () => { closeFileMenu(); exportPdfReport(); });
 $("#newProjectBtn").addEventListener("click", () => { closeFileMenu(); openNewProjectDialog(); });
 $(".file-menu").addEventListener("pointerleave", () => $(".file-menu").classList.remove("closed"));
@@ -4116,7 +4557,8 @@ $("#toggleLeftPanel").addEventListener("click", () => togglePanel("left"));
 $("#toggleRightPanel").addEventListener("click", () => togglePanel("right"));
 $("#toggleFilmstrip").addEventListener("click", toggleFilmstrip);
 $("#fitCanvasBtn").addEventListener("click", fitActiveImage);
-$("#closeStainWizard").addEventListener("click", closeStainWizard);
+$("#closeStainWizard").addEventListener("click", cancelStainWizard);
+$("#stainWizardCancel").addEventListener("click", cancelStainWizard);
 $("#stainWizard").addEventListener("cancel", (event) => event.preventDefault());
 bindStainWizardDrag();
 $("#stainWizardBack").addEventListener("click", stainWizardBack);
@@ -4148,7 +4590,7 @@ const shortcuts = { v: "select", s: "scale", p: "point", d: "distance", a: "angl
 if (shortcuts[key]) setTool(shortcuts[key]);
 if (key === "f") {
 event.preventDefault();
-flipSelectedEllipse();
+if (!flipSelectedSeedDirection()) flipSelectedEllipse();
 return;
 }
 if (event.key === "Delete" || event.key === "Backspace") deleteSelected();
@@ -4182,6 +4624,8 @@ setTool("select");
 populateProjectMetadata();
 setPointStyle(stylePrefs("point").pointStyle);
 setMeasureVariant("distance");
+applyPanelWidths();
+bindPanelResizers();
 refreshUI();
 function registerWebMcpTools() {
 const modelContext = document.modelContext;

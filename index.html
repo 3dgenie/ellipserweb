@@ -9,7 +9,7 @@
 <meta name="description" content="ELlipserWeb — local browser-based photographic measurement and trajectory documentation.">
 <title>ELlipserWeb</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b2238'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='12' fill='none' stroke='%23f09a35' stroke-width='4' transform='rotate(-24 32 32)'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%23f09a35'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=9">
+<link rel="stylesheet" href="styles.css?v=22">
 </head>
 <body>
 <div class="app-shell">
@@ -30,6 +30,7 @@
 <button type="button" class="file-sub-trigger" role="menuitem" aria-haspopup="true" aria-expanded="false">Export</button>
 <div class="file-submenu" role="menu">
 <button type="button" id="exportCsvBtn" role="menuitem" disabled>CSV Report</button>
+<button type="button" id="exportMeasurementsCsvBtn" role="menuitem" disabled>Measurements CSV</button>
 <button type="button" id="exportPdfBtn" role="menuitem" disabled>PDF Report</button>
 <button type="button" id="exportImageBtn" role="menuitem" disabled>Marked Image</button>
 </div>
@@ -60,6 +61,7 @@
 </nav>
 <aside class="object-sidebar">
 <button id="toggleLeftPanel" class="panel-collapse panel-collapse-left" aria-label="Collapse Structure and Properties" aria-expanded="true">‹</button>
+<div class="panel-resize panel-resize-left" data-side="left" role="separator" aria-orientation="vertical" aria-label="Resize Structure panel" tabindex="0"></div>
 <section class="panel structure-panel">
 <div class="panel-heading">
 <h2>Structure</h2>
@@ -90,6 +92,7 @@
 </section>
 <aside class="details-sidebar">
 <button id="toggleRightPanel" class="panel-collapse panel-collapse-right" aria-label="Collapse Project panel" aria-expanded="true">›</button>
+<div class="panel-resize panel-resize-right" data-side="right" role="separator" aria-orientation="vertical" aria-label="Resize Project panel" tabindex="0"></div>
 <section class="panel project-panel">
 <div class="panel-heading"><h2>Project</h2></div>
 <label>Project name<input id="projectName" value="Untitled Project"></label>
@@ -171,7 +174,7 @@
 <li>Draw a Scale on a known length so later values are in real units.</li>
 <li>Use the left tools to measure. Ellipse → Assisted finds stain centers and fits half-ellipses.</li>
 <li>Open the chart icon on a Stains session in Structure for distributions and the stain table.</li>
-<li>File → Save writes the project. File → Export makes a CSV report, a printable PDF report, or a marked PNG of the current photo.</li>
+<li>File → Save writes the project. File → Export makes a CSV report, Measurements CSV, a printable PDF report, or a marked PNG of the current photo.</li>
 </ol>
 </section>
 <section>
@@ -187,7 +190,7 @@
 <ul>
 <li>Calibrated length, width, alpha, and gamma for each stain.</li>
 <li>Assisted detection with dark and light stain samples, detect/exclude regions, and manual marking.</li>
-<li>Stain charts: impact-angle and width histograms, direction rose, width vs alpha, and a location map.</li>
+<li>Stain charts: impact-angle and width histograms, direction rose, width/length vs alpha, and a location map.</li>
 <li>Project metadata, structure tree, and per-object styles.</li>
 </ul>
 </section>
@@ -265,12 +268,17 @@
 <h2 id="stainChartViewerTitle"></h2>
 <p id="stainChartViewerCaption"></p>
 </div>
+<div class="stain-chart-viewer-head-actions">
+<span id="stainChartViewerCounter" class="stain-chart-viewer-counter"></span>
 <button type="button" id="closeStainChartViewer" class="dialog-close" aria-label="Close graph">×</button>
 </div>
-<div id="stainChartViewerStage" class="stain-chart-viewer-stage">
-<div id="stainChartViewerContent" class="stain-chart-viewer-content"></div>
 </div>
-<p class="stain-chart-viewer-hint">Wheel zoom · drag to pan · Esc to close</p>
+<div id="stainChartViewerStage" class="stain-chart-viewer-stage">
+<button type="button" id="stainChartViewerPrev" class="stain-chart-nav stain-chart-nav-prev" aria-label="Previous graph">‹</button>
+<div id="stainChartViewerContent" class="stain-chart-viewer-content"></div>
+<button type="button" id="stainChartViewerNext" class="stain-chart-nav stain-chart-nav-next" aria-label="Next graph">›</button>
+</div>
+<p class="stain-chart-viewer-hint">‹ › or arrow keys to cycle · wheel zoom · drag to pan · Esc to close</p>
 </div>
 </dialog>
 <dialog id="newProjectDialog" class="project-dialog">
@@ -315,37 +323,24 @@
 <dialog id="stainWizard" class="stain-wizard">
 <div class="stain-wizard-head">
 <div>
-<p id="stainWizardStep" class="stain-wizard-kicker">Step 1 of 8</p>
+<p id="stainWizardStep" class="stain-wizard-kicker">Step 1 of 9</p>
 <h2 id="stainWizardTitle">Setup</h2>
 </div>
-<button type="button" id="closeStainWizard" class="dialog-close" aria-label="Close setup">×</button>
+<button type="button" id="closeStainWizard" class="dialog-close" aria-label="Cancel setup">×</button>
 </div>
 <div id="stainWizardDots" class="stain-wizard-dots" aria-hidden="true"></div>
 <p id="stainWizardCopy" class="stain-wizard-copy"></p>
 <div id="stainWizardStatus" class="stain-wizard-status"></div>
 <div id="stainWizardExtra"></div>
 <div class="stain-wizard-actions">
+<button type="button" id="stainWizardCancel" class="button ghost">Cancel</button>
 <button type="button" id="stainWizardBack" class="button ghost">Back</button>
 <button type="button" id="stainWizardSkip" class="button ghost">Skip</button>
 <button type="button" id="stainWizardNext" class="button primary">Next</button>
 </div>
 </dialog>
-<dialog id="closePolygonDialog" class="project-dialog">
-<form method="dialog" class="dialog-form">
-<div class="dialog-heading">
-<div>
-<h2>Close Polygon?</h2>
-<p>Finish this shape now, or keep adding points.</p>
-</div>
-</div>
-<div class="dialog-actions">
-<button value="keep" class="button dialog-secondary">Keep Drawing</button>
-<button value="close" class="button primary">Close</button>
-</div>
-</form>
-</dialog>
 <input id="imageInput" type="file" accept="image/*" multiple hidden>
 <input id="projectInput" type="file" accept=".elp,application/octet-stream" hidden>
-<script src="app.js?v=9"></script>
+<script src="app.js?v=22"></script>
 </body>
 </html>
