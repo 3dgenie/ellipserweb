@@ -19,6 +19,9 @@ polygon: { color: "#19c9d2", lineWidth: 2 },
 text: { color: "#19c9d2", lineWidth: 2, fontSize: 18 },
 stainCount: { color: "#19c9d2", lineWidth: 2 },
 },
+assisted: {
+directionToleranceDeg: 3,
+},
 };
 const styleSettingRows = [
 { type: "scale", name: "Scale", extras: ["units"] },
@@ -37,10 +40,15 @@ return JSON.parse(JSON.stringify(source));
 }
 function mergePrefs(saved) {
 const prefs = clonePrefs();
-if (!saved || typeof saved !== "object" || !saved.styles || typeof saved.styles !== "object") return prefs;
+if (!saved || typeof saved !== "object") return prefs;
+if (saved.styles && typeof saved.styles === "object") {
 for (const type of Object.keys(prefs.styles)) {
 const incoming = saved.styles[type];
 if (incoming && typeof incoming === "object") prefs.styles[type] = { ...prefs.styles[type], ...incoming };
+}
+}
+if (saved.assisted && typeof saved.assisted === "object") {
+prefs.assisted = { ...prefs.assisted, ...saved.assisted };
 }
 return prefs;
 }
@@ -290,7 +298,7 @@ drawObject(targetCtx, object, zoom, object.id === state.selectedObjectId, export
 if (!exportMode && image.id === state.activeImageId && state.stainMode === "centers" && stainSession(image)?.visible !== false) drawSeedCenters(targetCtx, image, zoom);
 if (state.draft && image.id === state.activeImageId) drawDraft(targetCtx, state.draft, zoom);
 }
-function drawHalfEllipseShape(drawCtx, object, zoom) {
+function drawHalfEllipseShape(drawCtx, object, zoom = 1) {
 const rx = Math.abs(object.rx);
 const ry = Math.abs(object.ry);
 const rotation = object.rotation || 0;
@@ -298,6 +306,7 @@ drawCtx.beginPath();
 drawCtx.ellipse(object.cx, object.cy, rx, ry, rotation, -Math.PI / 2, Math.PI / 2);
 drawCtx.closePath();
 drawCtx.stroke();
+if (!object.showFullEllipse) return;
 drawCtx.save();
 drawCtx.globalAlpha *= 0.38;
 drawCtx.setLineDash([5 / zoom, 4 / zoom]);
@@ -964,7 +973,27 @@ open();
 });
 return panel;
 }
-function histogramSvg(values, { min, max, bins, mean, median, formatTick }) {
+function chartTickValues(min, max, count = 5) {
+if (!(count > 1) || !Number.isFinite(min) || !Number.isFinite(max)) return [min, max].filter(Number.isFinite);
+if (max === min) return [min];
+const ticks = [];
+for (let i = 0; i < count; i++) ticks.push(min + (max - min) * (i / (count - 1)));
+return ticks;
+}
+function appendAxisTitle(svg, text, x, y, { rotate = 0, anchor = "middle", size = 9 } = {}) {
+const node = svgEl("text", {
+x,
+y,
+fill: "#c4c4c8",
+"font-size": size,
+"font-weight": 600,
+"text-anchor": anchor,
+...(rotate ? { transform: `rotate(${rotate} ${x} ${y})` } : {}),
+});
+node.textContent = text;
+svg.append(node);
+}
+function histogramSvg(values, { min, max, bins, mean, median, formatTick, xLabel = "", yLabel = "Number of stains" }) {
 const counts = Array(bins).fill(0);
 const span = max - min || 1;
 values.forEach((value) => {
@@ -974,10 +1003,20 @@ if (index >= bins) index = bins - 1;
 counts[index] += 1;
 });
 const peak = Math.max(1, ...counts);
-const width = 280, height = 132, left = 28, right = 8, top = 8, bottom = 22;
+const width = 300, height = 168, left = 44, right = 12, top = 14, bottom = 40;
 const innerW = width - left - right, innerH = height - top - bottom;
 const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" });
 svg.append(svgEl("line", { x1: left, y1: top + innerH, x2: left + innerW, y2: top + innerH, stroke: "#4f4f4f", "stroke-width": 1 }));
+svg.append(svgEl("line", { x1: left, y1: top, x2: left, y2: top + innerH, stroke: "#4f4f4f", "stroke-width": 1 }));
+chartTickValues(0, peak, Math.min(5, peak + 1)).forEach((value) => {
+const y = top + innerH - (value / peak) * innerH;
+svg.append(svgEl("line", { x1: left - 3, y1: y, x2: left, y2: y, stroke: "#4f4f4f", "stroke-width": 1 }));
+if (peak > 1 || value === 0) {
+const text = svgEl("text", { x: left - 5, y: y + 3, fill: "#a1a1a6", "font-size": 8, "text-anchor": "end" });
+text.textContent = String(Math.round(value));
+svg.append(text);
+}
+});
 counts.forEach((count, i) => {
 const barW = innerW / bins;
 const barH = count / peak * innerH;
@@ -994,11 +1033,21 @@ if (Number.isFinite(mean)) svg.append(svgEl("line", { x1: xOf(mean), y1: top, x2
 if (Number.isFinite(median) && Math.abs(median - mean) > span * 0.04) {
 svg.append(svgEl("line", { x1: xOf(median), y1: top, x2: xOf(median), y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1, "stroke-dasharray": "3 3" }));
 }
-[[left, formatTick(min)], [left + innerW, formatTick(max)]].forEach(([x, label], i) => {
-const text = svgEl("text", { x, y: height - 6, fill: "#a1a1a6", "font-size": 9, "text-anchor": i ? "end" : "start" });
-text.textContent = label;
+chartTickValues(min, max, 5).forEach((value, i, ticks) => {
+const x = xOf(value);
+svg.append(svgEl("line", { x1: x, y1: top + innerH, x2: x, y2: top + innerH + 3, stroke: "#4f4f4f", "stroke-width": 1 }));
+const text = svgEl("text", {
+x,
+y: top + innerH + 14,
+fill: "#a1a1a6",
+"font-size": 8,
+"text-anchor": i === 0 ? "start" : i === ticks.length - 1 ? "end" : "middle",
+});
+text.textContent = formatTick(value);
 svg.append(text);
 });
+if (xLabel) appendAxisTitle(svg, xLabel, left + innerW / 2, height - 6);
+if (yLabel) appendAxisTitle(svg, yLabel, 12, top + innerH / 2, { rotate: -90 });
 return svg;
 }
 function roseSvg(gammas) {
@@ -1009,10 +1058,23 @@ const angle = ((gamma % 360) + 360) % 360;
 counts[Math.min(bins - 1, Math.floor(angle / 360 * bins))] += 1;
 });
 const peak = Math.max(1, ...counts);
-const cx = 80, cy = 80, maxR = 64;
-const svg = svgEl("svg", { viewBox: "0 0 160 160", role: "img" });
+const width = 200, height = 210, cx = 100, cy = 98, maxR = 68;
+const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" });
 svg.append(svgEl("circle", { cx, cy, r: maxR, fill: "none", stroke: "#3d3d3d" }));
+svg.append(svgEl("circle", { cx, cy, r: maxR * 0.75, fill: "none", stroke: "#303030" }));
 svg.append(svgEl("circle", { cx, cy, r: maxR * 0.5, fill: "none", stroke: "#303030" }));
+svg.append(svgEl("circle", { cx, cy, r: maxR * 0.25, fill: "none", stroke: "#303030" }));
+for (let i = 0; i < 8; i++) {
+const a = i / 8 * Math.PI * 2 - Math.PI / 2;
+svg.append(svgEl("line", {
+x1: cx + Math.cos(a) * 8,
+y1: cy + Math.sin(a) * 8,
+x2: cx + Math.cos(a) * maxR,
+y2: cy + Math.sin(a) * maxR,
+stroke: "#303030",
+"stroke-width": 1,
+}));
+}
 counts.forEach((count, i) => {
 if (!count) return;
 const a0 = i / bins * Math.PI * 2 - Math.PI / 2;
@@ -1026,37 +1088,62 @@ const path = [
 ].join(" ");
 svg.append(svgEl("path", { d: path, fill: "#f09a35", "fill-opacity": 0.88, stroke: "#0b2238", "stroke-width": 0.6 }));
 });
-[["N", 80, 12], ["E", 152, 84], ["S", 80, 156], ["W", 8, 84]].forEach(([label, x, y]) => {
+[
+["0°", cx, cy - maxR - 10],
+["90°", cx + maxR + 14, cy + 3],
+["180°", cx, cy + maxR + 14],
+["270°", cx - maxR - 14, cy + 3],
+].forEach(([label, x, y]) => {
 const text = svgEl("text", { x, y, fill: "#a1a1a6", "font-size": 9, "text-anchor": "middle" });
 text.textContent = label;
 svg.append(text);
 });
+appendAxisTitle(svg, "Travel direction γ (°)", cx, height - 8);
 return svg;
 }
-function scatterSvg(xs, ys, { xMin, xMax, yMin, yMax, formatX, formatY }) {
-const width = 280, height = 150, left = 32, right = 10, top = 10, bottom = 24;
+function scatterSvg(xs, ys, { xMin, xMax, yMin, yMax, formatX, formatY, xLabel = "", yLabel = "" }) {
+const width = 300, height = 188, left = 48, right = 14, top = 14, bottom = 42;
 const innerW = width - left - right, innerH = height - top - bottom;
 const xSpan = xMax - xMin || 1;
 const ySpan = yMax - yMin || 1;
 const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" });
 svg.append(svgEl("line", { x1: left, y1: top + innerH, x2: left + innerW, y2: top + innerH, stroke: "#4f4f4f" }));
 svg.append(svgEl("line", { x1: left, y1: top, x2: left, y2: top + innerH, stroke: "#4f4f4f" }));
-xs.forEach((x, i) => {
-const px = left + (x - xMin) / xSpan * innerW;
-const py = top + innerH - (ys[i] - yMin) / ySpan * innerH;
-svg.append(svgEl("circle", { cx: px, cy: py, r: 3, fill: "#19c9d2", "fill-opacity": 0.85 }));
+const xOf = (value) => left + (value - xMin) / xSpan * innerW;
+const yOf = (value) => top + innerH - (value - yMin) / ySpan * innerH;
+chartTickValues(xMin, xMax, 5).forEach((value, i, ticks) => {
+const x = xOf(value);
+svg.append(svgEl("line", { x1: x, y1: top, x2: x, y2: top + innerH, stroke: "#303030", "stroke-width": 1 }));
+svg.append(svgEl("line", { x1: x, y1: top + innerH, x2: x, y2: top + innerH + 3, stroke: "#4f4f4f", "stroke-width": 1 }));
+const text = svgEl("text", {
+x,
+y: top + innerH + 14,
+fill: "#a1a1a6",
+"font-size": 8,
+"text-anchor": i === 0 ? "start" : i === ticks.length - 1 ? "end" : "middle",
 });
-const labels = [
-{ x: left, y: height - 6, text: formatX(xMin), anchor: "start" },
-{ x: left + innerW, y: height - 6, text: formatX(xMax), anchor: "end" },
-{ x: 4, y: top + 8, text: formatY(yMax), anchor: "start" },
-{ x: 4, y: top + innerH, text: formatY(yMin), anchor: "start" },
-];
-labels.forEach((item) => {
-const text = svgEl("text", { x: item.x, y: item.y, fill: "#a1a1a6", "font-size": 9, "text-anchor": item.anchor });
-text.textContent = item.text;
+text.textContent = formatX(value);
 svg.append(text);
 });
+chartTickValues(yMin, yMax, 5).forEach((value) => {
+const y = yOf(value);
+svg.append(svgEl("line", { x1: left, y1: y, x2: left + innerW, y2: y, stroke: "#303030", "stroke-width": 1 }));
+svg.append(svgEl("line", { x1: left - 3, y1: y, x2: left, y2: y, stroke: "#4f4f4f", "stroke-width": 1 }));
+const text = svgEl("text", {
+x: left - 5,
+y: y + 3,
+fill: "#a1a1a6",
+"font-size": 8,
+"text-anchor": "end",
+});
+text.textContent = formatY(value);
+svg.append(text);
+});
+xs.forEach((x, i) => {
+svg.append(svgEl("circle", { cx: xOf(x), cy: yOf(ys[i]), r: 3, fill: "#19c9d2", "fill-opacity": 0.85 }));
+});
+if (xLabel) appendAxisTitle(svg, xLabel, left + innerW / 2, height - 6);
+if (yLabel) appendAxisTitle(svg, yLabel, 13, top + innerH / 2, { rotate: -90 });
 return svg;
 }
 function stainLocationMap(stains, image) {
@@ -1192,11 +1279,21 @@ if (!series.stains.length) return [];
 const { stains, widths, alphas, gammas, widthStats, alphaStats } = series;
 const widthUnit = (pixels) => calibratedLength(pixels, image);
 const widthMax = widthStats.max === widthStats.min ? widthStats.min + 1 : widthStats.max;
+const widthAxis = `Stain width (${image?.calibration?.units || "px"})`;
 return [
 {
 title: "Impact angle",
 caption: "Alpha from width/length. Near 90° is steep; lower values are more glancing. Cyan line is the mean.",
-node: histogramSvg(alphas, { min: 0, max: 90, bins: 9, mean: alphaStats.mean, median: alphaStats.median, formatTick: (value) => `${value.toFixed(0)}°` }),
+node: histogramSvg(alphas, {
+min: 0,
+max: 90,
+bins: 9,
+mean: alphaStats.mean,
+median: alphaStats.median,
+formatTick: (value) => `${value.toFixed(0)}°`,
+xLabel: "Impact angle α (°)",
+yLabel: "Number of stains",
+}),
 },
 {
 title: "Stain width",
@@ -1208,11 +1305,13 @@ bins: Math.min(10, Math.max(5, Math.ceil(Math.sqrt(widths.length)))),
 mean: widthStats.mean,
 median: widthStats.median,
 formatTick: (value) => widthUnit(value),
+xLabel: widthAxis,
+yLabel: "Number of stains",
 }),
 },
 {
 title: "Travel direction",
-caption: "Gamma rose. One lobe is a common path; opposite lobes mean mixed or opposing travel.",
+caption: "Gamma rose. One lobe is a common path; opposite lobes mean mixed or opposing travel. Angles are γ in degrees.",
 node: roseSvg(gammas),
 },
 {
@@ -1225,6 +1324,8 @@ yMin: 0,
 yMax: 90,
 formatX: (value) => widthUnit(value),
 formatY: (value) => `${value.toFixed(0)}°`,
+xLabel: widthAxis,
+yLabel: "Impact angle α (°)",
 }),
 },
 {
@@ -1415,7 +1516,7 @@ status: (session) => formatStainSampleSize(session?.largeSize),
 {
 id: "direction",
 title: "General Stain Direction",
-copy: "Drag in the direction the stains were traveling — toward the tails. The start of the arrow is the leading edge, where the half-ellipse should sit.",
+copy: "Drag in the direction the stains were traveling — toward the tails. The start of the arrow is the leading edge. After you place centers and arrows, Fit keeps each ellipse near that arrow (tolerance is in Settings).",
 waiting: "Drag an arrow on the image.",
 mode: "stainDirection",
 required: true,
@@ -1951,6 +2052,25 @@ if (ry > rx) ry = rx;
 if (ry < rx * 0.06) ry = rx * 0.06;
 return { ...geometry, rx, ry };
 }
+const STAIN_DIRECTION_BAND_DEFAULT_DEG = 3;
+function stainDirectionToleranceDeg() {
+const value = Number(state.prefs?.assisted?.directionToleranceDeg);
+if (!Number.isFinite(value)) return STAIN_DIRECTION_BAND_DEFAULT_DEG;
+return Math.max(0, Math.min(45, value));
+}
+function stainDirectionBandRad() {
+return stainDirectionToleranceDeg() * Math.PI / 180;
+}
+function stainDirectionStepRad(band) {
+if (!(band > 0)) return band;
+return Math.max(0.5 * Math.PI / 180, band / 6);
+}
+function shortestAngleDelta(a, b) {
+let delta = a - b;
+while (delta > Math.PI) delta -= Math.PI * 2;
+while (delta < -Math.PI) delta += Math.PI * 2;
+return delta;
+}
 function halfEllipseScore(geometry, pixels, blobSet, tailPixels = []) {
 const rx = Math.max(geometry.rx, 1);
 const ry = Math.max(geometry.ry, 1);
@@ -1992,6 +2112,13 @@ const maxAlong = fromCenter ? origin.rx * 0.15 : Infinity;
 const maxAcross = fromCenter ? origin.ry * 0.15 : Infinity;
 const minRx = fromCenter ? origin.rx * 0.85 : 0;
 const minRy = fromCenter ? origin.ry * 0.85 : 0;
+const preferredTravel = options.preferredTravel;
+const directionBand = Number.isFinite(options.directionBand) ? options.directionBand : stainDirectionBandRad();
+const preferredLeading = Number.isFinite(preferredTravel) ? normalizeAngle(preferredTravel + Math.PI) : null;
+const rotationAllowed = (rotation) => {
+if (!Number.isFinite(preferredLeading)) return true;
+return Math.abs(shortestAngleDelta(rotation, preferredLeading)) <= directionBand + 1e-6;
+};
 const withinCenterBudget = (next) => {
 const axisX = Math.cos(origin.rotation);
 const axisY = Math.sin(origin.rotation);
@@ -2025,6 +2152,7 @@ for (const change of trials) {
 const next = clampHalfEllipse({ ...best, ...change });
 if (next.rx < minRx - 1e-6 || next.ry < minRy - 1e-6) continue;
 if (!withinCenterBudget(next)) continue;
+if (!rotationAllowed(next.rotation || 0)) continue;
 const score = halfEllipseScore(next, pixels, blobSet, tailPixels);
 if (score > bestScore + 1e-4) {
 best = next;
@@ -2353,7 +2481,46 @@ const sorted = values.slice().sort((a, b) => a - b);
 const index = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * fraction)));
 return sorted[index];
 }
+function fitHalfAlongTravel(cx, cy, pixels, travelAngle, session) {
+const ux = -Math.cos(travelAngle);
+const uy = -Math.sin(travelAngle);
+const vx = -uy, vy = ux;
+const { body, tail } = bodyAndTailPixels(cx, cy, pixels, ux, uy);
+const extents = [];
+for (const point of body) {
+const t = (point.x - cx) * ux + (point.y - cy) * uy;
+if (t > 0) extents.push(t);
+}
+let rx = extentPercentile(extents, 0.97);
+if (rx < 2) {
+const small = Number(session?.smallSize);
+const large = Number(session?.largeSize);
+rx = Number.isFinite(small) && Number.isFinite(large) ? Math.max(2, (small + large) / 8) : 8;
+}
+const widths = [];
+for (const point of body) {
+const t = (point.x - cx) * ux + (point.y - cy) * uy;
+if (t < -1 || t > rx * 0.75) continue;
+widths.push((point.x - cx) * vx + (point.y - cy) * vy);
+}
+let sMin = 0, sMax = 0;
+if (widths.length) {
+sMin = extentPercentile(widths, 0.04);
+sMax = extentPercentile(widths, 0.96);
+}
+const ry = Math.max(1, (sMax - sMin) / 2 || rx * 0.4);
+return {
+geometry: clampHalfEllipse({ cx, cy, rx, ry, rotation: Math.atan2(uy, ux) }),
+body,
+tail,
+};
+}
 function fitHalfFromCenter(cx, cy, pixels, preferredAngle, session) {
+if (!pixels?.length) {
+const travel = Number.isFinite(preferredAngle) ? preferredAngle : 0;
+return fitHalfAlongTravel(cx, cy, [], travel, session);
+}
+if (!Number.isFinite(preferredAngle)) {
 const { ux, uy } = leadingAxisFromCenter(cx, cy, pixels, preferredAngle);
 const vx = -uy, vy = ux;
 const { body, tail } = bodyAndTailPixels(cx, cy, pixels, ux, uy);
@@ -2385,6 +2552,23 @@ geometry: clampHalfEllipse({ cx, cy, rx, ry, rotation: Math.atan2(uy, ux) }),
 body,
 tail,
 };
+}
+if (pixels.length < 6) return fitHalfAlongTravel(cx, cy, pixels, preferredAngle, session);
+const band = stainDirectionBandRad();
+if (band <= 0) return fitHalfAlongTravel(cx, cy, pixels, preferredAngle, session);
+const blobSet = new Set(pixels.map((point) => `${Math.round(point.x)},${Math.round(point.y)}`));
+let best = null;
+let bestScore = -Infinity;
+const step = stainDirectionStepRad(band);
+for (let delta = -band; delta <= band + 1e-9; delta += step) {
+const fitted = fitHalfAlongTravel(cx, cy, pixels, preferredAngle + delta, session);
+const score = halfEllipseScore(fitted.geometry, fitted.body, blobSet, fitted.tail);
+if (score > bestScore) {
+bestScore = score;
+best = fitted;
+}
+}
+return best || fitHalfAlongTravel(cx, cy, pixels, preferredAngle, session);
 }
 function autoDetectStains() {
 const image = activeImage();
@@ -2431,9 +2615,16 @@ const blobs = connectedComponents(built.mask, built.width, built.height);
 image.objects = image.objects.filter((object) => !(object.sessionId === session.id && (object.source === "auto" || object.fromSeed)));
 for (const seed of seeds) {
 const pixels = pixelsForSeed(seed, built, blobs);
-const fitted = fitHalfFromCenter(seed.x, seed.y, pixels, seedTravelAngle(seed, session), session);
+const travel = seedTravelAngle(seed, session);
+const band = stainDirectionBandRad();
+const fitted = fitHalfFromCenter(seed.x, seed.y, pixels, travel, session);
 const next = fitted.body.length
-? refineHalfEllipse(fitted.geometry, fitted.body, { fromCenter: true, tailPixels: fitted.tail })
+? refineHalfEllipse(fitted.geometry, fitted.body, {
+fromCenter: true,
+tailPixels: fitted.tail,
+preferredTravel: Number.isFinite(travel) ? travel : undefined,
+directionBand: band,
+})
 : fitted.geometry;
 addStain(session, next, seed.source === "manual" ? "manual" : "auto", { fromSeed: true });
 }
@@ -3175,6 +3366,7 @@ form.append(sessionButton("Flip direction", () => {
 object.rotation = normalizeAngle((object.rotation || 0) + Math.PI);
 refreshAfterPropertyChange();
 }));
+form.append(checkField("Full Ellipse", Boolean(object.showFullEllipse), (checked) => object.showFullEllipse = checked));
 form.append(checkField("Show points", object.showPoints !== false, (checked) => object.showPoints = checked));
 if (isSessionStain(object)) {
 form.append(readonlyField("Source", object.source === "manual" ? "Manually marked" : "Auto detected"));
@@ -3697,6 +3889,28 @@ item.append(settingsField("Handles", check));
 });
 list.appendChild(item);
 });
+const assisted = $("#settingsAssistedList");
+if (assisted) {
+assisted.innerHTML = "";
+const row = document.createElement("div");
+row.className = "style-row assisted-row";
+const tolerance = Object.assign(document.createElement("input"), {
+type: "number",
+value: stainDirectionToleranceDeg(),
+min: 0,
+max: 45,
+step: 0.5,
+});
+tolerance.addEventListener("input", () => {
+const value = Math.max(0, Math.min(45, Number(tolerance.value)));
+if (!state.prefs.assisted) state.prefs.assisted = { ...defaultPrefs.assisted };
+state.prefs.assisted.directionToleranceDeg = Number.isFinite(value) ? value : STAIN_DIRECTION_BAND_DEFAULT_DEG;
+tolerance.value = state.prefs.assisted.directionToleranceDeg;
+savePrefs();
+});
+row.append(settingsField("Ellipse angle fit (±°)", tolerance));
+assisted.appendChild(row);
+}
 }
 function createNewProject(event) {
 event.preventDefault();

@@ -9,7 +9,7 @@
 <meta name="description" content="ELlipserWeb — local browser-based photographic measurement and trajectory documentation.">
 <title>ELlipserWeb</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b2238'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='12' fill='none' stroke='%23f09a35' stroke-width='4' transform='rotate(-24 32 32)'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%23f09a35'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=3">
+<link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 <div class="app-shell">
@@ -23,7 +23,7 @@
 <div class="file-sub" role="none">
 <button type="button" class="file-sub-trigger" role="menuitem" aria-haspopup="true" aria-expanded="false">Import</button>
 <div class="file-submenu" role="menu">
-<button type="button" id="loadImagesBtn" role="menuitem">Image</button>
+<button type="button" id="loadImagesBtn" role="menuitem">Images</button>
 </div>
 </div>
 <div class="file-sub" role="none">
@@ -167,7 +167,7 @@
 <h3>Getting started</h3>
 <ol>
 <li>File → New to name the case, or File → Open to load a saved <code>.elp</code> project.</li>
-<li>File → Import → Image to add photographs.</li>
+<li>File → Import → Images to add photographs.</li>
 <li>Draw a Scale on a known length so later values are in real units.</li>
 <li>Use the left tools to measure. Ellipse → Assisted finds stain centers and fits half-ellipses.</li>
 <li>Open the chart icon on a Stains session in Structure for distributions and the stain table.</li>
@@ -179,7 +179,7 @@
 <ul>
 <li><strong>Scale, Measure, Circle, Ellipse, Polyline, Polygon, Text</strong> — click a tool, then draw on the photo.</li>
 <li><strong>Wheel</strong> zooms, <strong>right-drag</strong> pans, <strong>Delete</strong> removes the selection, <strong>F</strong> flips an ellipse, <strong>Ctrl+Z</strong> / <strong>Ctrl+Shift+Z</strong> undo and redo.</li>
-<li>Per-stain arrows at centers set travel direction before or after a fit.</li>
+<li>Per-stain arrows at centers set travel direction; Fit stays near each arrow within the Settings angle tolerance.</li>
 </ul>
 </section>
 <section>
@@ -209,6 +209,11 @@
 <section class="settings-section">
 <h3>Default styles for new objects</h3>
 <div id="settingsStyleList" class="settings-style-list"></div>
+</section>
+<section class="settings-section">
+<h3>Assisted stains</h3>
+<p class="settings-note">After centers and direction arrows are set, Fit may adjust each ellipse angle within this tolerance of its arrow.</p>
+<div id="settingsAssistedList" class="settings-assisted-list"></div>
 </section>
 <section class="settings-section">
 <h3>Testing</h3>
@@ -341,6 +346,6 @@
 </dialog>
 <input id="imageInput" type="file" accept="image/*" multiple hidden>
 <input id="projectInput" type="file" accept=".elp,application/octet-stream" hidden>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>
