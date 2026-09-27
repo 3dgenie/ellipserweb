@@ -20,7 +20,7 @@ text: { color: "#19c9d2", lineWidth: 2, fontSize: 18 },
 stainCount: { color: "#19c9d2", lineWidth: 2 },
 },
 assisted: {
-directionToleranceDeg: 3,
+directionToleranceDeg: 0,
 stainNumberColor: "#3d3d3d",
 },
 layout: {
@@ -54,6 +54,9 @@ if (incoming && typeof incoming === "object") prefs.styles[type] = { ...prefs.st
 }
 if (saved.assisted && typeof saved.assisted === "object") {
 prefs.assisted = { ...prefs.assisted, ...saved.assisted };
+if (!Number.isFinite(saved.assisted.directionToleranceDeg) || saved.assisted.directionToleranceDeg === 3) {
+prefs.assisted.directionToleranceDeg = 0;
+}
 }
 if (saved.layout && typeof saved.layout === "object") {
 prefs.layout = { ...prefs.layout, ...saved.layout };
@@ -94,6 +97,7 @@ stainWizardPos: null,
 stainWizardDrag: null,
 hoverObjectId: null,
 selectedSeedId: null,
+selectedStructureImageId: null,
 dpr: window.devicePixelRatio || 1,
 history: { past: [], future: [], applying: false },
 };
@@ -321,18 +325,14 @@ const rx = Math.abs(object.rx);
 const ry = Math.abs(object.ry);
 const rotation = object.rotation || 0;
 drawCtx.beginPath();
+if (object.showFullEllipse) {
+drawCtx.ellipse(object.cx, object.cy, rx, ry, rotation, 0, Math.PI * 2);
+drawCtx.stroke();
+return;
+}
 drawCtx.ellipse(object.cx, object.cy, rx, ry, rotation, -Math.PI / 2, Math.PI / 2);
 drawCtx.closePath();
 drawCtx.stroke();
-if (!object.showFullEllipse) return;
-drawCtx.save();
-drawCtx.globalAlpha *= 0.38;
-drawCtx.setLineDash([5 / zoom, 4 / zoom]);
-drawCtx.lineWidth = Math.max(1 / zoom, ((object.lineWidth || 2) * 0.75) / zoom);
-drawCtx.beginPath();
-drawCtx.ellipse(object.cx, object.cy, rx, ry, rotation, Math.PI / 2, Math.PI * 1.5);
-drawCtx.stroke();
-drawCtx.restore();
 }
 function lineStyle(drawCtx, object, zoom) {
 drawCtx.strokeStyle = object.color || "#19c9d2";
@@ -613,6 +613,7 @@ async function addImageFiles(files) {
 const valid = [...files].filter((file) => file.type.startsWith("image/"));
 if (!valid.length) return;
 recordHistory();
+if (!state.projectStarted) state.projectStarted = true;
 for (const file of valid) {
 const bytes = new Uint8Array(await file.arrayBuffer());
 const dataUrl = await fileToDataUrl(file);
@@ -1111,7 +1112,7 @@ if (index >= bins) index = bins - 1;
 counts[index] += 1;
 });
 const peak = Math.max(1, ...counts);
-const width = 300, height = 168, left = 44, right = 12, top = 14, bottom = 40;
+const width = 300, height = 188, left = 44, right = 12, top = 28, bottom = 40;
 const innerW = width - left - right, innerH = height - top - bottom;
 const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" });
 svg.append(svgEl("line", { x1: left, y1: top + innerH, x2: left + innerW, y2: top + innerH, stroke: "#4f4f4f", "stroke-width": 1 }));
@@ -1128,18 +1129,43 @@ svg.append(text);
 counts.forEach((count, i) => {
 const barW = innerW / bins;
 const barH = count / peak * innerH;
+const x = left + i * barW + 1;
+const y = top + innerH - barH;
 svg.append(svgEl("rect", {
-x: left + i * barW + 1,
-y: top + innerH - barH,
+x,
+y,
 width: Math.max(0.5, barW - 2),
 height: barH,
 fill: "#f09a35",
 }));
+if (count > 0) {
+const label = svgEl("text", {
+x: left + i * barW + barW / 2,
+y: Math.max(10, y - 3),
+fill: "#f4f4f5",
+"font-size": 8,
+"font-weight": 600,
+"text-anchor": "middle",
+});
+label.textContent = String(count);
+svg.append(label);
+}
 });
 const xOf = (value) => left + (value - min) / span * innerW;
-if (Number.isFinite(mean)) svg.append(svgEl("line", { x1: xOf(mean), y1: top, x2: xOf(mean), y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1.6 }));
-if (Number.isFinite(median) && Math.abs(median - mean) > span * 0.04) {
-svg.append(svgEl("line", { x1: xOf(median), y1: top, x2: xOf(median), y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1, "stroke-dasharray": "3 3" }));
+if (Number.isFinite(mean)) {
+const mx = xOf(mean);
+svg.append(svgEl("line", { x1: mx, y1: top, x2: mx, y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1.6 }));
+const meanLabel = svgEl("text", { x: mx, y: top - 8, fill: "#19c9d2", "font-size": 8, "font-weight": 600, "text-anchor": "middle" });
+meanLabel.textContent = `mean ${formatTick(mean)}`;
+svg.append(meanLabel);
+}
+if (Number.isFinite(median) && Math.abs(median - (mean || median)) > span * 0.04) {
+const medX = xOf(median);
+svg.append(svgEl("line", { x1: medX, y1: top, x2: medX, y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1, "stroke-dasharray": "3 3" }));
+const medLabel = svgEl("text", { x: medX, y: top + 10, fill: "#7dd3d8", "font-size": 8, "text-anchor": "middle" });
+medLabel.textContent = `med ${formatTick(median)}`;
+svg.append(medLabel);
+} else if (Number.isFinite(median) && Number.isFinite(mean) && Math.abs(median - mean) <= span * 0.04) {
 }
 chartTickValues(min, max, 5).forEach((value, i, ticks) => {
 const x = xOf(value);
@@ -1195,6 +1221,18 @@ const path = [
 "Z",
 ].join(" ");
 svg.append(svgEl("path", { d: path, fill: "#f09a35", "fill-opacity": 0.88, stroke: "#0b2238", "stroke-width": 0.6 }));
+const mid = (a0 + a1) / 2;
+const lr = r * 0.72;
+const label = svgEl("text", {
+x: cx + Math.cos(mid) * lr,
+y: cy + Math.sin(mid) * lr + 3,
+fill: "#0b2238",
+"font-size": 8,
+"font-weight": 700,
+"text-anchor": "middle",
+});
+label.textContent = String(count);
+svg.append(label);
 });
 [
 ["0°", cx, cy - maxR - 10],
@@ -1289,11 +1327,41 @@ const content = $("#stainChartViewerContent");
 if (!content) return;
 content.style.transform = `translate(${stainChartViewerView.x}px, ${stainChartViewerView.y}px) scale(${stainChartViewerView.scale})`;
 }
+function sizeStainChartViewerMedia() {
+const stage = $("#stainChartViewerStage");
+const frame = stage?.querySelector(".stain-chart-viewer-frame");
+if (!stage || !frame) return;
+const style = getComputedStyle(frame);
+const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+const availW = Math.max(48, stage.clientWidth - padX);
+const availH = Math.max(48, stage.clientHeight - padY);
+const svg = frame.querySelector(":scope > svg");
+const map = frame.querySelector(":scope > .stain-chart-map");
+if (svg) {
+const vb = svg.viewBox?.baseVal;
+const aspect = vb && vb.width > 0 && vb.height > 0
+? vb.width / vb.height
+: (Number(svg.getAttribute("width")) || 640) / (Number(svg.getAttribute("height")) || 360);
+let width = availW;
+let height = width / aspect;
+if (height > availH) {
+height = availH;
+width = height * aspect;
+}
+svg.style.width = `${Math.floor(width)}px`;
+svg.style.height = `${Math.floor(height)}px`;
+} else if (map) {
+map.style.width = `${Math.floor(availW)}px`;
+map.style.height = `${Math.floor(availH)}px`;
+}
+}
 function resetStainChartViewerView() {
 stainChartViewerView.x = 0;
 stainChartViewerView.y = 0;
 stainChartViewerView.scale = 1;
 stainChartViewerView.drag = null;
+sizeStainChartViewerMedia();
 applyStainChartViewerView();
 }
 function openStainChartViewerAt(index) {
@@ -1306,7 +1374,31 @@ $("#stainChartViewerTitle").textContent = spec.title;
 $("#stainChartViewerCaption").textContent = spec.caption;
 const host = $("#stainChartViewerContent");
 host.innerHTML = "";
-host.append(spec.node.cloneNode(true));
+const frame = document.createElement("div");
+frame.className = "stain-chart-viewer-frame";
+frame.append(spec.node.cloneNode(true));
+host.append(frame);
+const stats = $("#stainChartViewerStats");
+if (stats) {
+stats.innerHTML = "";
+if (spec.summary?.length) {
+const table = document.createElement("table");
+table.className = "stain-chart-summary-table";
+const body = document.createElement("tbody");
+spec.summary.forEach(([label, value]) => {
+const row = document.createElement("tr");
+row.innerHTML = `<th></th><td></td>`;
+row.querySelector("th").textContent = label;
+row.querySelector("td").textContent = value;
+body.append(row);
+});
+table.append(body);
+stats.append(table);
+stats.hidden = false;
+} else {
+stats.hidden = true;
+}
+}
 viewer.hidden = false;
 const prev = $("#stainChartViewerPrev");
 const next = $("#stainChartViewerNext");
@@ -1314,7 +1406,7 @@ if (prev) prev.disabled = count < 2;
 if (next) next.disabled = count < 2;
 const counter = $("#stainChartViewerCounter");
 if (counter) counter.textContent = `${stainChartViewerIndex + 1} / ${count}`;
-resetStainChartViewerView();
+requestAnimationFrame(() => requestAnimationFrame(resetStainChartViewerView));
 }
 function cycleStainChartViewer(delta) {
 if ($("#stainChartViewer")?.hidden || stainChartViewerSpecs.length < 2) return;
@@ -1325,6 +1417,11 @@ const viewer = $("#stainChartViewer");
 if (!viewer || viewer.hidden) return;
 viewer.hidden = true;
 $("#stainChartViewerContent").innerHTML = "";
+const stats = $("#stainChartViewerStats");
+if (stats) {
+stats.innerHTML = "";
+stats.hidden = true;
+}
 stainChartViewerView.drag = null;
 }
 function bindStainChartViewer() {
@@ -1347,7 +1444,7 @@ applyStainChartViewerView();
 }, { passive: false });
 stage.addEventListener("pointerdown", (event) => {
 if (event.button !== 0) return;
-if (event.target.closest(".stain-chart-nav")) return;
+if (event.target.closest(".stain-chart-nav, .stain-chart-fit")) return;
 stainChartViewerView.drag = { x: event.clientX - stainChartViewerView.x, y: event.clientY - stainChartViewerView.y };
 stage.classList.add("is-panning");
 stage.setPointerCapture(event.pointerId);
@@ -1409,17 +1506,26 @@ gammaStats: numericStats(gammas),
 function stainChartSpecs(session, image = activeImage()) {
 const series = collectStainSeries(session, image);
 if (!series.stains.length) return [];
-const { stains, lengths, widths, alphas, gammas, lengthStats, widthStats, alphaStats } = series;
+const { stains, lengths, widths, alphas, gammas, lengthStats, widthStats, alphaStats, gammaStats } = series;
 const sizeUnit = (pixels) => calibratedLength(pixels, image);
 const widthMax = widthStats.max === widthStats.min ? widthStats.min + 1 : widthStats.max;
 const lengthMax = lengthStats.max === lengthStats.min ? lengthStats.min + 1 : lengthStats.max;
 const units = image?.calibration?.units || "px";
 const widthAxis = `Stain width (${units})`;
 const lengthAxis = `Stain length (${units})`;
+const histSummary = (stats, format) => [
+["n", String(series.stains.length)],
+["Mean", format(stats.mean)],
+["Median", format(stats.median)],
+["Min", format(stats.min)],
+["Max", format(stats.max)],
+["Stdev", format(stats.stdev)],
+];
 return [
 {
 title: "Impact angle",
-caption: "Alpha from width/length. Near 90° is steep; lower values are more glancing. Cyan line is the mean.",
+caption: "Alpha from width/length. Near 90° is steep; lower values are more glancing. Cyan line is the mean; dashed is the median.",
+summary: histSummary(alphaStats, (value) => `${value.toFixed(1)}°`),
 node: histogramSvg(alphas, {
 min: 0,
 max: 90,
@@ -1434,6 +1540,7 @@ yLabel: "Number of stains",
 {
 title: "Stain width",
 caption: "Width is the size cue (length also includes elongation). Smaller widths often go with higher energy.",
+summary: histSummary(widthStats, sizeUnit),
 node: histogramSvg(widths, {
 min: widthStats.min,
 max: widthMax,
@@ -1448,11 +1555,25 @@ yLabel: "Number of stains",
 {
 title: "Travel direction",
 caption: "Gamma rose. One lobe is a common path; opposite lobes mean mixed or opposing travel. Angles are γ in degrees.",
+summary: [
+["n", String(gammas.length)],
+["Mean γ", `${gammaStats.mean.toFixed(1)}°`],
+["Median γ", `${gammaStats.median.toFixed(1)}°`],
+["Min γ", `${gammaStats.min.toFixed(1)}°`],
+["Max γ", `${gammaStats.max.toFixed(1)}°`],
+],
 node: roseSvg(gammas),
 },
 {
 title: "Width vs impact angle",
 caption: "Each stain is a point. Small-and-steep sits left and high; large-and-glancing sits right and low.",
+summary: [
+["n", String(widths.length)],
+["Mean width", sizeUnit(widthStats.mean)],
+["Mean α", `${alphaStats.mean.toFixed(1)}°`],
+["Median width", sizeUnit(widthStats.median)],
+["Median α", `${alphaStats.median.toFixed(1)}°`],
+],
 node: scatterSvg(widths, alphas, {
 xMin: widthStats.min,
 xMax: widthMax,
@@ -1467,6 +1588,13 @@ yLabel: "Impact angle α (°)",
 {
 title: "Length vs impact angle",
 caption: "Each stain is a point. Longer stains often sit lower (more glancing); short-and-steep sits left and high.",
+summary: [
+["n", String(lengths.length)],
+["Mean length", sizeUnit(lengthStats.mean)],
+["Mean α", `${alphaStats.mean.toFixed(1)}°`],
+["Median length", sizeUnit(lengthStats.median)],
+["Median α", `${alphaStats.median.toFixed(1)}°`],
+],
 node: scatterSvg(lengths, alphas, {
 xMin: lengthStats.min,
 xMax: lengthMax,
@@ -1483,6 +1611,11 @@ title: "Location",
 caption: "Dots on the photo. Color goes from orange (low alpha / glancing) to cyan (near 90°).",
 kind: "map",
 stains,
+summary: [
+["n", String(stains.length)],
+["Mean α", `${alphaStats.mean.toFixed(1)}°`],
+["Mean γ", `${gammaStats.mean.toFixed(1)}°`],
+],
 node: stainLocationMap(stains, image),
 },
 ];
@@ -1740,7 +1873,9 @@ goStainWizardStep(firstIncompleteStainStep(stainSession()));
 function closeStainWizard() {
 state.stainWizardOpen = false;
 const panel = $("#stainWizard");
-if (panel?.open) panel.close();
+if (!panel) return;
+panel.hidden = true;
+panel.classList.remove("is-open");
 }
 function cancelStainWizard() {
 const image = activeImage();
@@ -1784,10 +1919,12 @@ function renderStainWizard() {
 const panel = $("#stainWizard");
 if (!panel) return;
 if (!state.stainWizardOpen) {
-if (panel.open) panel.close();
+panel.hidden = true;
+panel.classList.remove("is-open");
 return;
 }
-if (!panel.open) panel.show();
+panel.hidden = false;
+panel.classList.add("is-open");
 applyStainWizardPosition();
 const session = stainSession();
 const index = state.stainWizardIndex;
@@ -2246,7 +2383,7 @@ if (ry > rx) ry = rx;
 if (ry < rx * 0.06) ry = rx * 0.06;
 return { ...geometry, rx, ry };
 }
-const STAIN_DIRECTION_BAND_DEFAULT_DEG = 3;
+const STAIN_DIRECTION_BAND_DEFAULT_DEG = 0;
 function stainDirectionToleranceDeg() {
 const value = Number(state.prefs?.assisted?.directionToleranceDeg);
 if (!Number.isFinite(value)) return STAIN_DIRECTION_BAND_DEFAULT_DEG;
@@ -2334,8 +2471,10 @@ const trials = [
 { rx: Math.max(minRx, best.rx - step) },
 { ry: best.ry + step },
 { ry: Math.max(minRy, best.ry - step) },
+...(directionBand > 0 ? [
 { rotation: (best.rotation || 0) + angleStep },
 { rotation: (best.rotation || 0) - angleStep },
+] : []),
 { cx: best.cx + axisX * step, cy: best.cy + axisY * step },
 { cx: best.cx - axisX * step, cy: best.cy - axisY * step },
 { cx: best.cx - axisY * step, cy: best.cy + axisX * step },
@@ -2724,23 +2863,19 @@ return wide + (tight - wide) * c;
 }
 function resolveAndScoreTravel(seed, session, cx, cy, pixels) {
 const baseBand = stainDirectionBandRad();
+const seedTravel = Number.isFinite(seed?.direction) ? seed.direction : null;
 const guide = Number.isFinite(session?.direction)
 ? session.direction
-: (Number.isFinite(seed?.direction) ? seed.direction : null);
-const fallback = Number.isFinite(seed?.direction) ? seed.direction : (Number.isFinite(guide) ? guide : 0);
-if (!pixels?.length || pixels.length < 6) {
+: seedTravel;
+const locked = seedTravel ?? (Number.isFinite(guide) ? guide : 0);
+if (!pixels?.length || pixels.length < 6 || !(baseBand > 0)) {
 return {
-travel: fallback,
+travel: locked,
 band: baseBand,
-fitted: fitHalfAlongTravel(cx, cy, pixels || [], fallback, session),
+fitted: fitHalfAlongTravel(cx, cy, pixels || [], locked, session),
 };
 }
-const axis = leadingAxisFromCenter(cx, cy, pixels);
-const maskTravel = alignTravelToGuide(Math.atan2(-axis.uy, -axis.ux), guide);
-const confidence = elongationConfidence(axis.aspect);
-const preferred = maskTravel;
-const searchBand = adaptiveTravelSearchBand(baseBand, confidence);
-const step = stainDirectionStepRad(Math.max(searchBand, baseBand || 1e-6));
+const step = stainDirectionStepRad(baseBand);
 const blobSet = new Set(pixels.map((point) => `${Math.round(point.x)},${Math.round(point.y)}`));
 const angles = [];
 const seen = new Set();
@@ -2750,20 +2885,17 @@ if (seen.has(key)) return;
 seen.add(key);
 angles.push(angle);
 };
-for (let delta = -searchBand; delta <= searchBand + 1e-9; delta += Math.max(step, 1e-6)) {
-pushAngle(preferred + delta);
+for (let delta = -baseBand; delta <= baseBand + 1e-9; delta += Math.max(step, 1e-6)) {
+pushAngle(locked + delta);
 }
-pushAngle(maskTravel);
-if (Number.isFinite(seed?.direction)) pushAngle(seed.direction);
-if (Number.isFinite(guide)) pushAngle(guide);
+pushAngle(locked);
 let best = null;
 let bestScore = -Infinity;
-let bestTravel = preferred;
+let bestTravel = locked;
 for (const theta of angles) {
 const fitted = fitHalfAlongTravel(cx, cy, pixels, theta, session);
 let score = halfEllipseScore(fitted.geometry, fitted.body, blobSet, fitted.tail);
-score += 0.12 * Math.cos(shortestAngleDelta(theta, maskTravel));
-if (Number.isFinite(guide)) score += 0.06 * Math.cos(shortestAngleDelta(theta, guide));
+score += 0.2 * Math.cos(shortestAngleDelta(theta, locked));
 if (score > bestScore) {
 bestScore = score;
 best = fitted;
@@ -2773,7 +2905,7 @@ bestTravel = theta;
 return {
 travel: bestTravel,
 band: baseBand,
-fitted: best || fitHalfAlongTravel(cx, cy, pixels, preferred, session),
+fitted: best || fitHalfAlongTravel(cx, cy, pixels, locked, session),
 };
 }
 function bodyAndTailPixels(cx, cy, pixels, ux, uy) {
@@ -2816,8 +2948,8 @@ widths.push((point.x - cx) * vx + (point.y - cy) * vy);
 }
 let sMin = 0, sMax = 0;
 if (widths.length) {
-sMin = extentPercentile(widths, 0.04);
-sMax = extentPercentile(widths, 0.96);
+sMin = extentPercentile(widths, 0.10);
+sMax = extentPercentile(widths, 0.90);
 }
 const ry = Math.max(1, (sMax - sMin) / 2 || rx * 0.4);
 return {
@@ -2854,8 +2986,8 @@ widths.push((point.x - cx) * vx + (point.y - cy) * vy);
 }
 let sMin = 0, sMax = 0;
 if (widths.length) {
-sMin = extentPercentile(widths, 0.04);
-sMax = extentPercentile(widths, 0.96);
+sMin = extentPercentile(widths, 0.10);
+sMax = extentPercentile(widths, 0.90);
 }
 const ry = Math.max(1, (sMax - sMin) / 2 || rx * 0.4);
 return {
@@ -3521,6 +3653,7 @@ function refreshUI() {
 const image = activeImage();
 $("#emptyState").hidden = Boolean(image) || state.projectStarted;
 ["#exportImageBtn", "#exportCsvBtn", "#exportMeasurementsCsvBtn", "#exportPdfBtn", "#fitCanvasBtn"].forEach((selector) => $(selector).disabled = !image);
+updateProjectTitle();
 renderFilmstrip();
 renderStructure();
 renderProperties();
@@ -3532,21 +3665,26 @@ draw();
 function renderFilmstrip() {
 $("#filmstrip").innerHTML = "";
 state.project.images.forEach((image) => {
-const button = document.createElement("button");
-button.className = `thumb${image.id === state.activeImageId ? " active" : ""}`;
-button.innerHTML = `<span></span><img alt="">`;
-button.title = image.name;
-button.querySelector("img").src = image.element.src;
-button.querySelector("span").textContent = image.name;
-button.querySelector("span").title = image.name;
-button.addEventListener("click", () => {
+const wrap = document.createElement("div");
+wrap.className = `thumb${image.id === state.activeImageId ? " active" : ""}`;
+wrap.innerHTML = `<button type="button" class="thumb-hit"><span></span><img alt=""></button><button type="button" class="thumb-remove" aria-label="Delete image" title="Delete image">×</button>`;
+wrap.querySelector("img").src = image.element.src;
+wrap.querySelector("span").textContent = image.name;
+wrap.querySelector("span").title = image.name;
+wrap.querySelector(".thumb-hit").title = image.name;
+wrap.querySelector(".thumb-hit").addEventListener("click", () => {
 state.activeImageId = image.id;
 state.selectedObjectId = null;
+state.selectedStructureImageId = null;
 state.draft = null;
 refreshUI();
 if (image.view.zoom === 1 && image.view.panX === 0 && image.view.panY === 0) requestAnimationFrame(fitActiveImage);
 });
-$("#filmstrip").appendChild(button);
+wrap.querySelector(".thumb-remove").addEventListener("click", (event) => {
+event.stopPropagation();
+removeProjectImage(image.id);
+});
+$("#filmstrip").appendChild(wrap);
 });
 }
 function renderStructure() {
@@ -3556,10 +3694,18 @@ $("#structureEmpty").hidden = Boolean(image);
 if (!image) return;
 adoptOrphanStains(image);
 const imageRow = document.createElement("div");
-imageRow.className = "structure-item image-row";
+imageRow.className = `structure-item image-row${state.selectedStructureImageId === image.id ? " selected" : ""}`;
 imageRow.innerHTML = `<span class="structure-icon"><img alt=""></span><span class="name"></span>`;
 imageRow.querySelector("img").src = image.element.src;
 imageRow.querySelector(".name").textContent = image.name;
+imageRow.title = "Select, then Delete to remove this photo";
+imageRow.addEventListener("click", () => {
+state.selectedStructureImageId = image.id;
+state.selectedObjectId = null;
+state.selectedSeedId = null;
+renderStructure();
+renderProperties();
+});
 $("#structureList").appendChild(imageRow);
 const appendObjectRow = (object, { child = false } = {}) => {
 const hidden = object.visible === false;
@@ -3571,7 +3717,10 @@ const childCount = object.type === "stainCount" ? sessionStains(object, image).l
 row.querySelector(".name").textContent = object.type === "stainCount" && object.structureCollapsed && childCount
 ? `${object.name} (${childCount})`
 : object.name;
-row.addEventListener("click", () => selectObject(object.id));
+row.addEventListener("click", () => {
+state.selectedStructureImageId = null;
+selectObject(object.id);
+});
 if (object.type === "stainCount") {
 row.title = object.structureCollapsed ? "Double-click to expand stains" : "Double-click to collapse stains";
 row.addEventListener("dblclick", (event) => {
@@ -3644,6 +3793,7 @@ return icons[key] || icons.distance;
 }
 function selectObject(id) {
 const object = activeImage()?.objects.find((item) => item.id === id);
+state.selectedStructureImageId = null;
 if (isSessionStain(object)) {
 selectStain(object);
 return;
@@ -3869,6 +4019,35 @@ item.addEventListener("click", () => selectObject(object.id));
 $("#measurementList").appendChild(item);
 });
 }
+function removeProjectImage(imageId) {
+const index = state.project.images.findIndex((image) => image.id === imageId);
+if (index < 0) return false;
+const image = state.project.images[index];
+const markCount = image.objects?.length || 0;
+const ok = window.confirm(
+`Delete “${image.name}”?\n\nThis removes the photo and all of its markings (${markCount}) from the project. This cannot be undone.`,
+);
+if (!ok) return false;
+recordHistory();
+const session = stainSession(image);
+if (session) invalidateStainMask(session);
+state.project.images.splice(index, 1);
+if (state.activeImageId === imageId) {
+state.activeImageId = state.project.images[Math.min(index, state.project.images.length - 1)]?.id || null;
+}
+state.selectedObjectId = null;
+state.selectedStructureImageId = null;
+state.selectedSeedId = null;
+state.draft = null;
+state.stainMode = null;
+closeStainWizard();
+refreshUI();
+const next = activeImage();
+if (next && next.view.zoom === 1 && next.view.panX === 0 && next.view.panY === 0) {
+requestAnimationFrame(fitActiveImage);
+}
+return true;
+}
 function deleteSelected() {
 const image = activeImage();
 if (state.stainMode === "centers" && state.selectedSeedId) {
@@ -3877,6 +4056,10 @@ if (seed) {
 removeSeedCenter(seed);
 return;
 }
+}
+if (state.selectedStructureImageId) {
+removeProjectImage(state.selectedStructureImageId);
+return;
 }
 if (!image || !state.selectedObjectId) return;
 recordHistory();
@@ -4092,15 +4275,31 @@ console.error(error);
 alert("This .elp project could not be opened. It may be damaged or from an unsupported version.");
 }
 }
+function projectFileLabel() {
+const hasProject = state.projectStarted || state.project.images.length > 0;
+if (!hasProject) return "Untitled.elp";
+const name = (state.project.name || "").trim().replace(/\.elp$/i, "");
+if (!name || /^untitled(\s+project)?$/i.test(name)) return "Untitled.elp";
+return `${name}.elp`;
+}
+function updateProjectTitle() {
+const label = projectFileLabel();
+const el = $("#projectTitle");
+if (!el) return;
+el.textContent = label;
+el.title = label;
+}
 function syncProjectMetadata() {
 state.project.name = $("#projectName").value.trim() || "Untitled Project";
 state.project.caseNumber = $("#caseNumber").value.trim();
 state.project.notes = $("#projectNotes").value;
+updateProjectTitle();
 }
 function populateProjectMetadata() {
 $("#projectName").value = state.project.name;
 $("#caseNumber").value = state.project.caseNumber;
 $("#projectNotes").value = state.project.notes;
+updateProjectTitle();
 }
 function openNewProjectDialog() {
 $("#newProjectForm").reset();
@@ -4493,14 +4692,16 @@ $("#loadImagesBtn").addEventListener("click", () => {
 closeFileMenu();
 $("#imageInput").click();
 });
-$("#sampleImageBtn").addEventListener("click", loadSampleImage);
-$("#stainSampleImageBtn").addEventListener("click", loadStainSampleImage);
 $("#helpBtn").addEventListener("click", () => $("#helpDialog").showModal());
 $("#closeHelpDialog").addEventListener("click", () => { const dialog = $("#helpDialog"); if (dialog.open) dialog.close(); });
 $("#settingsBtn").addEventListener("click", openSettingsDialog);
 $("#closeSettingsDialog").addEventListener("click", closeSettingsDialog);
 $("#closeStainChartDialog").addEventListener("click", closeStainChart);
 $("#closeStainChartViewer").addEventListener("click", closeStainChartViewer);
+$("#stainChartViewerFit")?.addEventListener("click", (event) => {
+event.stopPropagation();
+resetStainChartViewerView();
+});
 $("#stainChartDialog").addEventListener("cancel", (event) => {
 if (!$("#stainChartViewer")?.hidden) {
 event.preventDefault();
@@ -4559,7 +4760,6 @@ $("#toggleFilmstrip").addEventListener("click", toggleFilmstrip);
 $("#fitCanvasBtn").addEventListener("click", fitActiveImage);
 $("#closeStainWizard").addEventListener("click", cancelStainWizard);
 $("#stainWizardCancel").addEventListener("click", cancelStainWizard);
-$("#stainWizard").addEventListener("cancel", (event) => event.preventDefault());
 bindStainWizardDrag();
 $("#stainWizardBack").addEventListener("click", stainWizardBack);
 $("#stainWizardSkip").addEventListener("click", stainWizardSkip);
@@ -4571,7 +4771,7 @@ $("#projectName").addEventListener("input", syncProjectMetadata);
 $("#caseNumber").addEventListener("input", syncProjectMetadata);
 $("#projectNotes").addEventListener("input", syncProjectMetadata);
 window.addEventListener("keydown", (event) => {
-if (document.querySelector("dialog[open]:not(#stainWizard)")) return;
+if (document.querySelector("dialog[open]")) return;
 if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
 const key = event.key.toLowerCase();
 if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "z") {

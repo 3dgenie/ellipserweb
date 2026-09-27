@@ -9,7 +9,7 @@
 <meta name="description" content="ELlipserWeb — local browser-based photographic measurement and trajectory documentation.">
 <title>ELlipserWeb</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b2238'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='12' fill='none' stroke='%23f09a35' stroke-width='4' transform='rotate(-24 32 32)'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%23f09a35'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=22">
+<link rel="stylesheet" href="styles.css?v=37">
 </head>
 <body>
 <div class="app-shell">
@@ -37,7 +37,14 @@
 </div>
 </div>
 </nav>
+<span id="projectTitle" class="project-title" title="Untitled.elp">Untitled.elp</span>
+<div class="topbar-brand" aria-label="ELlipserWeb V1.0 (Beta)">
+<span class="brand-mark" aria-hidden="true"></span>
+<span class="brand-name">ELlipser<span>Web</span></span>
+<span class="brand-version">V1.0 (Beta)</span>
+</div>
 <div class="top-actions">
+<a id="contactBtn" class="button ghost icon-only" href="https://www.ai2-3d.com/contact" target="_blank" rel="noopener noreferrer" title="Contact" aria-label="Contact"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="6" width="17" height="12" rx="2"></rect><path d="m4.5 7.5 7.5 6 7.5-6"></path></svg></a>
 <button id="helpBtn" class="button ghost icon-only" title="Help" aria-label="Help"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.6 9.2a2.5 2.5 0 0 1 4.7.9c0 1.5-2.3 1.7-2.3 3.2"></path><circle cx="12" cy="17.1" r=".7" fill="currentColor" stroke="none"></circle></svg></button>
 <button id="settingsBtn" class="button ghost icon-only" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 13a8 8 0 0 0 .06-1 8 8 0 0 0-.06-1l2.11-1.65-2-3.46-2.49.8a8 8 0 0 0-1.73-1L12.7 2h-1.4L10.7 4.69a8 8 0 0 0-1.73 1l-2.49-.8-2 3.46L6.6 11a8 8 0 0 0 0 2l-2.11 1.65 2 3.46 2.49-.8a8 8 0 0 0 1.73 1L11.3 22h1.4l.6-2.69a8 8 0 0 0 1.73-1l2.49.8 2-3.46Z"></path></svg></button>
 </div>
@@ -117,9 +124,7 @@
 </main>
 <footer class="statusbar">
 <div><strong>LMB</strong> Select object / draw <span class="divider">|</span> <strong>Wheel</strong> Zoom <span class="divider">|</span> <strong>RMB</strong> Pan / finish polyline, polygon, or stain region <span class="divider">|</span> <strong>Delete</strong> Remove selected <span class="divider">|</span> <strong>F</strong> Flip ellipse</div>
-<div class="brand-status" aria-label="ELlipserWeb">
-<span class="brand-mark" aria-hidden="true"></span>
-<span class="brand-name">ELlipser<span>Web</span></span>
+<div class="brand-status">
 <span class="brand-copy">© 2026 ai2-3D. All rights reserved.</span>
 </div>
 </footer>
@@ -186,6 +191,15 @@
 </ul>
 </section>
 <section>
+<h3>Assisted fitting sliders</h3>
+<p>On the last assisted-wizard step (and on a Stains session in Properties), three sliders tune Find Centers and Fit Ellipses. Change a value, then run Find Centers or Fit again.</p>
+<ul>
+<li><strong>Color Threshold</strong> — How strongly pixels must match your stain color samples versus the background. Raise it to ignore faint or off-color marks; lower it to pick up lighter or less distinct stains.</li>
+<li><strong>Size Threshold</strong> — How closely detected blobs must match the small and large size samples from setup. Raise it to keep only stains near those sizes; lower it to allow a wider size range.</li>
+<li><strong>Front / fill</strong> — How solid a blob must be (how much of its bounding box is filled). Raise it to drop thin, broken, or sparse patches; lower it if real stains are being filtered out. Larger stains skip this filter.</li>
+</ul>
+</section>
+<section>
 <h3>Capabilities</h3>
 <ul>
 <li>Calibrated length, width, alpha, and gamma for each stain.</li>
@@ -215,15 +229,8 @@
 </section>
 <section class="settings-section">
 <h3>Assisted stains</h3>
-<p class="settings-note">After centers and direction arrows are set, Fit may adjust each ellipse angle within this tolerance of its arrow.</p>
+<p class="settings-note">Fit locks each ellipse to its center direction arrow. 0° = strict alignment; raise the tolerance only if you want Fit to nudge the angle slightly.</p>
 <div id="settingsAssistedList" class="settings-assisted-list"></div>
-</section>
-<section class="settings-section">
-<h3>Testing</h3>
-<p class="settings-note">Measurement scene: a 400 px square, a 200 px circle, a 300 × 200 px triangle, and a 500 mm scale bar.</p>
-<button type="button" id="sampleImageBtn" class="button dialog-secondary">Load Sample Scene</button>
-<p class="settings-note">Stain photo: HemoVision card and real bloodstains on a light wall. Scale is a placeholder so Auto Detect can run.</p>
-<button type="button" id="stainSampleImageBtn" class="button dialog-secondary">Load Stain Scene</button>
 </section>
 <div class="dialog-actions settings-actions">
 <button type="button" id="resetSettingsBtn" class="button dialog-secondary">Reset to Defaults</button>
@@ -277,8 +284,10 @@
 <button type="button" id="stainChartViewerPrev" class="stain-chart-nav stain-chart-nav-prev" aria-label="Previous graph">‹</button>
 <div id="stainChartViewerContent" class="stain-chart-viewer-content"></div>
 <button type="button" id="stainChartViewerNext" class="stain-chart-nav stain-chart-nav-next" aria-label="Next graph">›</button>
+<button type="button" id="stainChartViewerFit" class="stain-chart-fit" title="Fit graph to view" aria-label="Fit graph to view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
 </div>
-<p class="stain-chart-viewer-hint">‹ › or arrow keys to cycle · wheel zoom · drag to pan · Esc to close</p>
+<div id="stainChartViewerStats" class="stain-chart-viewer-stats" hidden></div>
+<p class="stain-chart-viewer-hint">‹ › or arrow keys to cycle · wheel zoom · drag to pan · Fit recenters · Esc to close</p>
 </div>
 </dialog>
 <dialog id="newProjectDialog" class="project-dialog">
@@ -320,7 +329,7 @@
 </div>
 </form>
 </dialog>
-<dialog id="stainWizard" class="stain-wizard">
+<div id="stainWizard" class="stain-wizard" hidden role="dialog" aria-modal="false" aria-labelledby="stainWizardTitle">
 <div class="stain-wizard-head">
 <div>
 <p id="stainWizardStep" class="stain-wizard-kicker">Step 1 of 9</p>
@@ -338,9 +347,9 @@
 <button type="button" id="stainWizardSkip" class="button ghost">Skip</button>
 <button type="button" id="stainWizardNext" class="button primary">Next</button>
 </div>
-</dialog>
+</div>
 <input id="imageInput" type="file" accept="image/*" multiple hidden>
 <input id="projectInput" type="file" accept=".elp,application/octet-stream" hidden>
-<script src="app.js?v=22"></script>
+<script src="app.js?v=37"></script>
 </body>
 </html>
