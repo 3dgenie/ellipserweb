@@ -8,6 +8,7 @@ const PREFS_KEY = "ellipserweb.prefs.v1";
 const defaultPrefs = {
 styles: {
 scale: { color: "#f09a35", lineWidth: 2, units: "mm" },
+plumb: { color: "#f09a35", lineWidth: 2 },
 point: { color: "#19c9d2", lineWidth: 2, pointStyle: "cross", size: 8 },
 distance: { color: "#19c9d2", lineWidth: 2 },
 angle: { color: "#19c9d2", lineWidth: 2 },
@@ -27,9 +28,16 @@ layout: {
 leftPanelWidth: 270,
 rightPanelWidth: 292,
 },
+panels: {
+structure: { visible: true, mode: "docked", side: "left", order: 0, heightFrac: 0.45, float: { left: 72, top: 72, width: 280, height: 320 } },
+properties: { visible: true, mode: "docked", side: "left", order: 1, heightFrac: 0.55, float: { left: 100, top: 110, width: 300, height: 380 } },
+project: { visible: true, mode: "docked", side: "right", order: 0, heightFrac: 0.35, float: { left: 420, top: 72, width: 300, height: 260 } },
+measurements: { visible: true, mode: "docked", side: "right", order: 1, heightFrac: 0.65, float: { left: 450, top: 120, width: 300, height: 420 } },
+},
 };
 const styleSettingRows = [
 { type: "scale", name: "Scale", extras: ["units"] },
+{ type: "plumb", name: "Plumb" },
 { type: "point", name: "Point", extras: ["pointStyle", "size"] },
 { type: "distance", name: "Distance" },
 { type: "angle", name: "Angle" },
@@ -60,6 +68,17 @@ prefs.assisted.directionToleranceDeg = 0;
 }
 if (saved.layout && typeof saved.layout === "object") {
 prefs.layout = { ...prefs.layout, ...saved.layout };
+}
+if (saved.panels && typeof saved.panels === "object") {
+for (const key of Object.keys(prefs.panels)) {
+const incoming = saved.panels[key];
+if (!incoming || typeof incoming !== "object") continue;
+prefs.panels[key] = {
+...prefs.panels[key],
+...incoming,
+float: { ...prefs.panels[key].float, ...(incoming.float && typeof incoming.float === "object" ? incoming.float : {}) },
+};
+}
 }
 return prefs;
 }
@@ -100,6 +119,8 @@ selectedSeedId: null,
 selectedStructureImageId: null,
 dpr: window.devicePixelRatio || 1,
 history: { past: [], future: [], applying: false },
+projectFileName: null,
+plumbViewFreeze: null,
 };
 function cloneJson(value) {
 return JSON.parse(JSON.stringify(value));
@@ -121,6 +142,7 @@ images: state.project.images.map((image) => ({
 image,
 objects: cloneJson(image.objects),
 calibrationId: image.calibration?.id || null,
+plumbId: image.plumb?.id || null,
 })),
 };
 }
@@ -140,6 +162,7 @@ state.project.images = snap.images.map((entry) => {
 const image = entry.image;
 image.objects = cloneJson(entry.objects);
 image.calibration = image.objects.find((object) => object.id === entry.calibrationId) || null;
+image.plumb = image.objects.find((object) => object.id === entry.plumbId) || null;
 return image;
 });
 state.project.name = snap.projectMeta.name;
@@ -153,6 +176,7 @@ state.stainMode = snap.stainMode;
 if (snap.stainVariant && snap.stainVariant !== state.stainVariant) setStainVariant(snap.stainVariant);
 state.draft = null;
 state.dragging = null;
+endPlumbViewFreeze();
 stainMaskCache.clear();
 populateProjectMetadata();
 refreshUI();
@@ -241,20 +265,61 @@ return ((((object.rotation || 0) * 180 / Math.PI) - 90) % 360 + 360) % 360;
 function rotationFromGammaDegrees(gamma) {
 return normalizeAngle((Number(gamma) + 90) * Math.PI / 180);
 }
+function normalizeDegrees(deg) {
+return ((Number(deg) % 360) + 360) % 360;
+}
+function plumbAngleRadians(plumb) {
+if (!plumb?.p1 || !plumb?.p2) return Math.PI / 2;
+return Math.atan2(plumb.p2.y - plumb.p1.y, plumb.p2.x - plumb.p1.x);
+}
+function plumbOffsetRadians(image = activeImage()) {
+const plumb = image?.plumb;
+if (!plumb?.p1 || !plumb?.p2) return 0;
+return plumbAngleRadians(plumb) - Math.PI / 2;
+}
+function plumbOffsetDegrees(image = activeImage()) {
+return plumbOffsetRadians(image) * 180 / Math.PI;
+}
+function imageViewRotation(image = activeImage()) {
+const plumb = image?.plumb;
+if (!plumb || plumb.alignToGravity === false) return 0;
+if (state.plumbViewFreeze != null) return state.plumbViewFreeze;
+return -plumbOffsetRadians(image);
+}
+function beginPlumbViewFreeze(image = activeImage()) {
+if (state.plumbViewFreeze != null) return;
+const plumb = image?.plumb;
+if (!plumb || plumb.alignToGravity === false) state.plumbViewFreeze = 0;
+else state.plumbViewFreeze = -plumbOffsetRadians(image);
+}
+function endPlumbViewFreeze() {
+if (state.plumbViewFreeze == null) return;
+state.plumbViewFreeze = null;
+}
+function displayGammaDegrees(object, image = activeImage()) {
+return normalizeDegrees(ellipseGammaDegrees(object) - plumbOffsetDegrees(image));
+}
+function rotationFromDisplayGammaDegrees(gamma, image = activeImage()) {
+return rotationFromGammaDegrees(Number(gamma) + plumbOffsetDegrees(image));
+}
 function objectValue(object, image = activeImage()) {
 const scale = unitScale(image);
 const units = image?.calibration?.units || "px";
 const lengthLabel = (pixels) => scale ? `${(pixels * scale).toFixed(2)} ${units}` : `${pixels.toFixed(1)} px`;
 if (object.type === "scale") return `${object.knownLength} ${object.units}`;
+if (object.type === "plumb") {
+const offset = plumbOffsetDegrees(image);
+return `gravity · ${offset >= 0 ? "+" : ""}${offset.toFixed(1)}° vs vertical`;
+}
 if (object.type === "distance" || object.type === "reference") return lengthLabel(distance(object.p1, object.p2));
 if (object.type === "angle") return `${angleDegrees(object.p1, object.p2, object.p3).toFixed(1)}°`;
 if (object.type === "ellipse") {
 const major = Math.max(object.rx, object.ry) * 2;
 const minor = Math.min(object.rx, object.ry) * 2;
-return `L ${lengthLabel(major)} · W ${lengthLabel(minor)} · α ${ellipseAlphaDegrees(object).toFixed(1)}° · γ ${ellipseGammaDegrees(object).toFixed(1)}°`;
+return `L ${lengthLabel(major)} · W ${lengthLabel(minor)} · α ${ellipseAlphaDegrees(object).toFixed(1)}° · γ ${displayGammaDegrees(object, image).toFixed(1)}°`;
 }
 if (object.type === "halfEllipse") {
-return `L ${lengthLabel(object.rx * 2)} · W ${lengthLabel(object.ry * 2)} · α ${ellipseAlphaDegrees(object).toFixed(1)}° · γ ${ellipseGammaDegrees(object).toFixed(1)}°`;
+return `L ${lengthLabel(object.rx * 2)} · W ${lengthLabel(object.ry * 2)} · α ${ellipseAlphaDegrees(object).toFixed(1)}° · γ ${displayGammaDegrees(object, image).toFixed(1)}°`;
 }
 if (object.type === "circle") {
 const diameter = Math.abs(object.rx) * 2;
@@ -279,10 +344,27 @@ function imagePoint(event) {
 const image = activeImage();
 const rect = canvas.getBoundingClientRect();
 if (!image) return { x: 0, y: 0 };
-return {
-x: (event.clientX - rect.left - image.view.panX) / image.view.zoom,
-y: (event.clientY - rect.top - image.view.panY) / image.view.zoom,
-};
+const ux = (event.clientX - rect.left - image.view.panX) / image.view.zoom;
+const uy = (event.clientY - rect.top - image.view.panY) / image.view.zoom;
+const rot = imageViewRotation(image);
+if (!rot) return { x: ux, y: uy };
+const cx = image.width / 2;
+const cy = image.height / 2;
+const dx = ux - cx;
+const dy = uy - cy;
+const cos = Math.cos(-rot);
+const sin = Math.sin(-rot);
+return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+}
+function applyImageSpaceTransform(targetCtx, image, zoom, panX, panY, dpr) {
+targetCtx.setTransform(zoom * dpr, 0, 0, zoom * dpr, panX * dpr, panY * dpr);
+const rot = imageViewRotation(image);
+if (!rot) return;
+const cx = image.width / 2;
+const cy = image.height / 2;
+targetCtx.translate(cx, cy);
+targetCtx.rotate(rot);
+targetCtx.translate(-cx, -cy);
 }
 function fitActiveImage() {
 const image = activeImage();
@@ -310,7 +392,7 @@ if (!image?.element) return;
 const zoom = exportMode ? 1 : image.view.zoom;
 const panX = exportMode ? 0 : image.view.panX;
 const panY = exportMode ? 0 : image.view.panY;
-targetCtx.setTransform(zoom * dpr, 0, 0, zoom * dpr, panX * dpr, panY * dpr);
+applyImageSpaceTransform(targetCtx, image, zoom, panX, panY, dpr);
 targetCtx.drawImage(image.element, 0, 0, image.width, image.height);
 if (!exportMode && image.id === state.activeImageId && (state.tool === "stainCount" || state.stainMode || selectedObject()?.type === "stainCount") && stainSession(image)?.visible !== false) drawStainMask(targetCtx, image);
 for (const object of image.objects) {
@@ -344,7 +426,7 @@ drawCtx.setLineDash([]);
 }
 function drawObject(drawCtx, object, zoom, isSelected, exportMode) {
 const showLabel = exportMode || isSelected;
-const showHandles = isSelected && !exportMode;
+const showHandles = isSelected && !exportMode && object.showPoints !== false;
 const hovered = !exportMode && object.id === state.hoverObjectId && !isSelected;
 drawCtx.save();
 lineStyle(drawCtx, object, zoom);
@@ -352,6 +434,10 @@ if (hovered) drawCtx.lineWidth = ((object.lineWidth || 2) + 1.5) / zoom;
 if (object.type === "distance" || object.type === "scale" || object.type === "reference") {
 drawCtx.beginPath(); drawCtx.moveTo(object.p1.x, object.p1.y); drawCtx.lineTo(object.p2.x, object.p2.y); drawCtx.stroke();
 if (showLabel) drawLabel(drawCtx, objectValue(object), midpoint(object.p1, object.p2), zoom);
+if (showHandles) drawHandles(drawCtx, [object.p1, object.p2], zoom);
+} else if (object.type === "plumb") {
+drawDirectionArrow(drawCtx, object.p1, object.p2, zoom);
+if (showLabel) drawLabel(drawCtx, objectValue(object, activeImage()), midpoint(object.p1, object.p2), zoom);
 if (showHandles) drawHandles(drawCtx, [object.p1, object.p2], zoom);
 } else if (object.type === "angle") {
 drawCtx.beginPath(); drawCtx.moveTo(object.p1.x, object.p1.y); drawCtx.lineTo(object.p2.x, object.p2.y); drawCtx.lineTo(object.p3.x, object.p3.y); drawCtx.stroke();
@@ -418,6 +504,9 @@ drawCtx.beginPath(); drawCtx.arc(draft.start.x, draft.start.y, radius, 0, Math.P
 } else if (draft.type === "stainDirection" && draft.start && draft.current) {
 drawCtx.setLineDash([]);
 drawDirectionArrow(drawCtx, draft.start, draft.current, zoom);
+} else if (draft.type === "plumb" && draft.points?.length && draft.current) {
+drawCtx.setLineDash([]);
+drawDirectionArrow(drawCtx, draft.points[0], draft.current, zoom);
 } else if (draft.type === "stainSample" && draft.start && draft.current) {
 drawCtx.beginPath();
 drawCtx.moveTo(draft.start.x, draft.start.y);
@@ -622,7 +711,7 @@ const element = await loadImage(dataUrl);
 state.project.images.push({
 id: uid("img"), name: file.name, mime: file.type || "image/jpeg", bytes,
 width: element.naturalWidth, height: element.naturalHeight, element,
-calibration: null, objects: [], view: { zoom: 1, panX: 0, panY: 0 },
+calibration: null, plumb: null, objects: [], view: { zoom: 1, panX: 0, panY: 0 },
 });
 } catch {
 alert(`${file.name} could not be opened by this browser.`);
@@ -985,7 +1074,7 @@ hintEl.hidden = true;
 function makeObject(type, data) {
 const image = activeImage();
 const count = image.objects.filter((object) => object.type === type).length + 1;
-const label = ({ scale: "Scale", point: "Point", distance: "Distance", angle: "Angle", circle: "Circle", ellipse: "Ellipse", halfEllipse: "Half Ellipse", polyline: "Polyline", polygon: "Polygon", text: "Text", stainCount: "Stains" })[type];
+const label = ({ scale: "Scale", plumb: "Plumb", point: "Point", distance: "Distance", angle: "Angle", circle: "Circle", ellipse: "Ellipse", halfEllipse: "Half Ellipse", polyline: "Polyline", polygon: "Polygon", text: "Text", stainCount: "Stains" })[type];
 const style = stylePrefs(type);
 return { id: uid(type), type, name: `${label} ${count}`, visible: true, locked: false, color: style.color, lineWidth: style.lineWidth, ...data };
 }
@@ -997,11 +1086,25 @@ const session = ensureStainSession(image, { record: false });
 object.sessionId = session.id;
 if (!object.source) object.source = "manual";
 }
+if (object.type === "scale" || object.type === "plumb") {
+const removedId = object.type === "scale" ? image.calibration?.id : image.plumb?.id;
+image.objects = image.objects.filter((item) => item.type !== object.type);
+if (object.type === "scale" && image.calibration?.id === removedId) image.calibration = null;
+if (object.type === "plumb" && image.plumb?.id === removedId) {
+image.plumb = null;
+endPlumbViewFreeze();
+}
+}
 image.objects.push(object);
 if (object.type === "scale") {
 object.knownLength = 100;
 object.units = stylePrefs("scale").units || "mm";
 image.calibration = object;
+}
+if (object.type === "plumb") {
+if (object.alignToGravity === undefined) object.alignToGravity = true;
+image.plumb = object;
+endPlumbViewFreeze();
 }
 if (object.sessionId) {
 const session = image.objects.find((item) => item.id === object.sessionId) || stainSession(image);
@@ -1112,7 +1215,7 @@ if (index >= bins) index = bins - 1;
 counts[index] += 1;
 });
 const peak = Math.max(1, ...counts);
-const width = 300, height = 188, left = 44, right = 12, top = 28, bottom = 40;
+const width = 300, height = 196, left = 44, right = 12, top = 36, bottom = 40;
 const innerW = width - left - right, innerH = height - top - bottom;
 const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" });
 svg.append(svgEl("line", { x1: left, y1: top + innerH, x2: left + innerW, y2: top + innerH, stroke: "#4f4f4f", "stroke-width": 1 }));
@@ -1126,11 +1229,15 @@ text.textContent = String(Math.round(value));
 svg.append(text);
 }
 });
+const xOf = (value) => left + (value - min) / span * innerW;
+const meanX = Number.isFinite(mean) ? xOf(mean) : null;
+const medianX = Number.isFinite(median) ? xOf(median) : null;
 counts.forEach((count, i) => {
 const barW = innerW / bins;
 const barH = count / peak * innerH;
 const x = left + i * barW + 1;
 const y = top + innerH - barH;
+const barMidX = left + i * barW + barW / 2;
 svg.append(svgEl("rect", {
 x,
 y,
@@ -1139,10 +1246,14 @@ height: barH,
 fill: "#f09a35",
 }));
 if (count > 0) {
+const aboveY = y - 4;
+const nearMarker = (meanX != null && Math.abs(barMidX - meanX) < barW * 0.85)
+|| (medianX != null && Math.abs(barMidX - medianX) < barW * 0.85);
+const placeInside = barH >= 14 && (aboveY < top + 4 || nearMarker);
 const label = svgEl("text", {
-x: left + i * barW + barW / 2,
-y: Math.max(10, y - 3),
-fill: "#f4f4f5",
+x: barMidX,
+y: placeInside ? y + 11 : Math.max(12, aboveY),
+fill: placeInside ? "#141414" : "#f4f4f5",
 "font-size": 8,
 "font-weight": 600,
 "text-anchor": "middle",
@@ -1151,21 +1262,26 @@ label.textContent = String(count);
 svg.append(label);
 }
 });
-const xOf = (value) => left + (value - min) / span * innerW;
 if (Number.isFinite(mean)) {
-const mx = xOf(mean);
-svg.append(svgEl("line", { x1: mx, y1: top, x2: mx, y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1.6 }));
-const meanLabel = svgEl("text", { x: mx, y: top - 8, fill: "#19c9d2", "font-size": 8, "font-weight": 600, "text-anchor": "middle" });
+svg.append(svgEl("line", { x1: meanX, y1: top, x2: meanX, y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1.6 }));
+let meanAnchor = "middle";
+let meanLabelX = meanX;
+if (meanX < left + 28) { meanAnchor = "start"; meanLabelX = meanX + 3; }
+else if (meanX > left + innerW - 28) { meanAnchor = "end"; meanLabelX = meanX - 3; }
+const meanLabel = svgEl("text", { x: meanLabelX, y: 12, fill: "#19c9d2", "font-size": 8, "font-weight": 600, "text-anchor": meanAnchor });
 meanLabel.textContent = `mean ${formatTick(mean)}`;
 svg.append(meanLabel);
 }
 if (Number.isFinite(median) && Math.abs(median - (mean || median)) > span * 0.04) {
-const medX = xOf(median);
-svg.append(svgEl("line", { x1: medX, y1: top, x2: medX, y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1, "stroke-dasharray": "3 3" }));
-const medLabel = svgEl("text", { x: medX, y: top + 10, fill: "#7dd3d8", "font-size": 8, "text-anchor": "middle" });
+svg.append(svgEl("line", { x1: medianX, y1: top, x2: medianX, y2: top + innerH, stroke: "#19c9d2", "stroke-width": 1, "stroke-dasharray": "3 3" }));
+let medAnchor = "middle";
+let medLabelX = medianX;
+if (medianX < left + 24) { medAnchor = "start"; medLabelX = medianX + 3; }
+else if (medianX > left + innerW - 24) { medAnchor = "end"; medLabelX = medianX - 3; }
+const medY = meanX != null && Math.abs(medianX - meanX) < 42 ? 24 : 12;
+const medLabel = svgEl("text", { x: medLabelX, y: medY, fill: "#7dd3d8", "font-size": 8, "text-anchor": medAnchor });
 medLabel.textContent = `med ${formatTick(median)}`;
 svg.append(medLabel);
-} else if (Number.isFinite(median) && Number.isFinite(mean) && Math.abs(median - mean) <= span * 0.04) {
 }
 chartTickValues(min, max, 5).forEach((value, i, ticks) => {
 const x = xOf(value);
@@ -1322,6 +1438,7 @@ return wrap;
 const stainChartViewerView = { x: 0, y: 0, scale: 1, drag: null };
 let stainChartViewerSpecs = [];
 let stainChartViewerIndex = 0;
+let stainChartViewerTab = "graph";
 function applyStainChartViewerView() {
 const content = $("#stainChartViewerContent");
 if (!content) return;
@@ -1330,7 +1447,7 @@ content.style.transform = `translate(${stainChartViewerView.x}px, ${stainChartVi
 function sizeStainChartViewerMedia() {
 const stage = $("#stainChartViewerStage");
 const frame = stage?.querySelector(".stain-chart-viewer-frame");
-if (!stage || !frame) return;
+if (!stage || !frame || stage.hidden) return;
 const style = getComputedStyle(frame);
 const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
 const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
@@ -1364,6 +1481,34 @@ stainChartViewerView.drag = null;
 sizeStainChartViewerMedia();
 applyStainChartViewerView();
 }
+function setStainChartViewerTab(tab) {
+stainChartViewerTab = tab === "table" ? "table" : "graph";
+const stage = $("#stainChartViewerStage");
+const stats = $("#stainChartViewerStats");
+const graphTab = $("#stainChartViewerTabGraph");
+const tableTab = $("#stainChartViewerTabTable");
+const hint = $("#stainChartViewerHint");
+const showGraph = stainChartViewerTab === "graph";
+if (stage) stage.hidden = !showGraph;
+if (stats) {
+const hasTable = Boolean(stats.querySelector("table"));
+stats.hidden = showGraph || !hasTable;
+}
+if (graphTab) {
+graphTab.classList.toggle("active", showGraph);
+graphTab.setAttribute("aria-selected", String(showGraph));
+}
+if (tableTab) {
+tableTab.classList.toggle("active", !showGraph);
+tableTab.setAttribute("aria-selected", String(!showGraph));
+}
+if (hint) {
+hint.textContent = showGraph
+? "‹ › or arrow keys to cycle · wheel zoom · drag to pan · Fit recenters · Esc to close"
+: "‹ › or arrow keys to cycle · Esc to close";
+}
+if (showGraph) requestAnimationFrame(() => requestAnimationFrame(resetStainChartViewerView));
+}
 function openStainChartViewerAt(index) {
 if (!stainChartViewerSpecs.length) return;
 const count = stainChartViewerSpecs.length;
@@ -1379,6 +1524,8 @@ frame.className = "stain-chart-viewer-frame";
 frame.append(spec.node.cloneNode(true));
 host.append(frame);
 const stats = $("#stainChartViewerStats");
+const tableTab = $("#stainChartViewerTabTable");
+let hasSummary = false;
 if (stats) {
 stats.innerHTML = "";
 if (spec.summary?.length) {
@@ -1394,11 +1541,11 @@ body.append(row);
 });
 table.append(body);
 stats.append(table);
-stats.hidden = false;
-} else {
-stats.hidden = true;
+hasSummary = true;
 }
 }
+if (tableTab) tableTab.disabled = !hasSummary;
+if (!hasSummary && stainChartViewerTab === "table") stainChartViewerTab = "graph";
 viewer.hidden = false;
 const prev = $("#stainChartViewerPrev");
 const next = $("#stainChartViewerNext");
@@ -1406,7 +1553,7 @@ if (prev) prev.disabled = count < 2;
 if (next) next.disabled = count < 2;
 const counter = $("#stainChartViewerCounter");
 if (counter) counter.textContent = `${stainChartViewerIndex + 1} / ${count}`;
-requestAnimationFrame(() => requestAnimationFrame(resetStainChartViewerView));
+setStainChartViewerTab(stainChartViewerTab);
 }
 function cycleStainChartViewer(delta) {
 if ($("#stainChartViewer")?.hidden || stainChartViewerSpecs.length < 2) return;
@@ -1423,12 +1570,14 @@ stats.innerHTML = "";
 stats.hidden = true;
 }
 stainChartViewerView.drag = null;
+stainChartViewerTab = "graph";
 }
 function bindStainChartViewer() {
 const stage = $("#stainChartViewerStage");
 if (!stage || stage.dataset.bound) return;
 stage.dataset.bound = "true";
 stage.addEventListener("wheel", (event) => {
+if (stage.hidden) return;
 event.preventDefault();
 event.stopPropagation();
 const rect = stage.getBoundingClientRect();
@@ -1443,7 +1592,7 @@ stainChartViewerView.scale = next;
 applyStainChartViewerView();
 }, { passive: false });
 stage.addEventListener("pointerdown", (event) => {
-if (event.button !== 0) return;
+if (event.button !== 0 || stage.hidden) return;
 if (event.target.closest(".stain-chart-nav, .stain-chart-fit")) return;
 stainChartViewerView.drag = { x: event.clientX - stainChartViewerView.x, y: event.clientY - stainChartViewerView.y };
 stage.classList.add("is-panning");
@@ -1469,6 +1618,13 @@ $("#stainChartViewerNext")?.addEventListener("click", (event) => {
 event.stopPropagation();
 cycleStainChartViewer(1);
 });
+$$("[data-viewer-tab]").forEach((button) => {
+button.addEventListener("click", (event) => {
+event.stopPropagation();
+if (button.disabled) return;
+setStainChartViewerTab(button.dataset.viewerTab);
+});
+});
 }
 function openStainChart(session) {
 fillStainChart(session);
@@ -1489,7 +1645,7 @@ stains.forEach((stain) => {
 lengths.push(Math.abs(stain.rx) * 2);
 widths.push(Math.abs(stain.ry) * 2);
 alphas.push(ellipseAlphaDegrees(stain));
-gammas.push(ellipseGammaDegrees(stain));
+gammas.push(displayGammaDegrees(stain, image));
 });
 return {
 stains,
@@ -1854,7 +2010,7 @@ done: (session) => sessionStains(session).length > 0,
 ];
 function formatStainDirection(session) {
 if (!Number.isFinite(session?.direction)) return "";
-return `γ ${ellipseGammaDegrees({ rotation: session.direction }).toFixed(1)}°`;
+return `γ ${displayGammaDegrees({ rotation: session.direction }).toFixed(1)}°`;
 }
 function formatStainSampleSize(pixels) {
 if (!Number.isFinite(pixels)) return "";
@@ -3255,7 +3411,7 @@ return;
 }
 if (!["stainColor", "stainColorLight", "backgroundColor", "smallSize", "largeSize", "stainDirection", "detect", "exclude"].includes(state.stainMode || "")) {
 const current = selectedObject();
-const control = isEllipseLike(current?.type) && !current.locked ? hitEllipseControl(current, point, image.view.zoom) : null;
+const control = isEllipseLike(current?.type) && !current.locked && current.showPoints !== false ? hitEllipseControl(current, point, image.view.zoom) : null;
 if (control) {
 if (!selectingStainKeepsTool()) setTool("select");
 recordHistory();
@@ -3274,7 +3430,7 @@ return;
 if (handleStainPointerDown(event, point, image)) return;
 if (!state.draft && !state.stainMode) {
 const current = selectedObject();
-const control = isEllipseLike(current?.type) && !current.locked ? hitEllipseControl(current, point, image.view.zoom) : null;
+const control = isEllipseLike(current?.type) && !current.locked && current.showPoints !== false ? hitEllipseControl(current, point, image.view.zoom) : null;
 if (control) {
 setTool("select");
 recordHistory();
@@ -3286,6 +3442,7 @@ const vertex = hitVertex(current, point, image.view.zoom);
 if (vertex) {
 setTool("select");
 recordHistory();
+if (current.type === "plumb") beginPlumbViewFreeze(image);
 state.dragging = { mode: "vertex", vertex, object: current, start: point, snapshot: JSON.parse(JSON.stringify(current)) };
 canvas.setPointerCapture(event.pointerId);
 return;
@@ -3296,6 +3453,7 @@ setTool("select");
 state.selectedObjectId = hit.id;
 if (!hit.locked) {
 recordHistory();
+if (hit.type === "plumb") beginPlumbViewFreeze(image);
 state.dragging = { mode: "translate", object: hit, start: point, snapshot: JSON.parse(JSON.stringify(hit)) };
 canvas.setPointerCapture(event.pointerId);
 }
@@ -3321,9 +3479,11 @@ if (state.tool === "text") {
 openTextDialog(point);
 return;
 }
-if (["scale", "distance"].includes(state.tool)) {
-if (!state.draft) state.draft = { type: state.tool, points: [point], current: point };
-else completeObject(makeObject(state.tool, { p1: state.draft.points[0], p2: point }));
+if (["scale", "distance", "plumb"].includes(state.tool)) {
+if (!state.draft) {
+if (state.tool === "plumb") beginPlumbViewFreeze(image);
+state.draft = { type: state.tool, points: [point], current: point };
+} else completeObject(makeObject(state.tool, { p1: state.draft.points[0], p2: point }));
 draw();
 return;
 }
@@ -3367,7 +3527,6 @@ seed.directionUncertain = false;
 } else if (state.dragging.mode === "vertex") {
 setVertexPoint(state.dragging.object, state.dragging.vertex, { x: point.x, y: point.y });
 renderMeasurements();
-renderCalibration();
 } else {
 const dx = point.x - state.dragging.start.x;
 const dy = point.y - state.dragging.start.y;
@@ -3387,7 +3546,7 @@ updateStainHover(point);
 function updateStainHover(point) {
 const image = activeImage();
 const current = selectedObject();
-const control = isEllipseLike(current?.type) && !current.locked ? hitEllipseControl(current, point, image.view.zoom) : null;
+const control = isEllipseLike(current?.type) && !current.locked && current.showPoints !== false ? hitEllipseControl(current, point, image.view.zoom) : null;
 const vertex = hitVertex(current, point, image.view.zoom);
 const seedTip = state.stainMode === "centers" ? hitSeedVectorTip(point) : null;
 const seed = state.stainMode === "centers" ? hitSeedAt(point) : null;
@@ -3412,8 +3571,10 @@ try { canvas.releasePointerCapture(event.pointerId); } catch {}
 return;
 }
 if (state.dragging) {
+const wasPlumb = state.dragging.object?.type === "plumb";
 state.dragging = null;
 try { canvas.releasePointerCapture(event.pointerId); } catch {}
+if (wasPlumb) endPlumbViewFreeze();
 refreshUI();
 return;
 }
@@ -3518,7 +3679,7 @@ if (snapshot.excludeRegions) object.excludeRegions = snapshot.excludeRegions.map
 }
 function objectVertices(object) {
 if (!object || object.locked || object.visible === false) return [];
-if (["distance", "scale", "reference"].includes(object.type)) return [{ key: "p1" }, { key: "p2" }];
+if (["distance", "scale", "reference", "plumb"].includes(object.type)) return [{ key: "p1" }, { key: "p2" }];
 if (object.type === "angle") return [{ key: "p1" }, { key: "p2" }, { key: "p3" }];
 if (object.type === "text" || object.type === "point") return [{ key: "p" }];
 if (object.type === "polyline" || object.type === "polygon") return object.points.map((point, index) => ({ index }));
@@ -3597,7 +3758,7 @@ const threshold = 10 / image.view.zoom;
 return [...image.objects].reverse().find((object) => objectIsDrawn(object, image) && objectDistance(object, point) <= threshold) || null;
 }
 function objectDistance(object, point) {
-if (["distance", "scale", "reference"].includes(object.type)) return pointSegmentDistance(point, object.p1, object.p2);
+if (["distance", "scale", "reference", "plumb"].includes(object.type)) return pointSegmentDistance(point, object.p1, object.p2);
 if (object.type === "angle") return Math.min(pointSegmentDistance(point, object.p1, object.p2), pointSegmentDistance(point, object.p2, object.p3));
 if (object.type === "ellipse" || object.type === "circle") {
 const dx = point.x - object.cx, dy = point.y - object.cy;
@@ -3642,11 +3803,35 @@ event.preventDefault();
 const rect = canvas.getBoundingClientRect();
 const mouseX = event.clientX - rect.left;
 const mouseY = event.clientY - rect.top;
-const before = { x: (mouseX - image.view.panX) / image.view.zoom, y: (mouseY - image.view.panY) / image.view.zoom };
+const ux = (mouseX - image.view.panX) / image.view.zoom;
+const uy = (mouseY - image.view.panY) / image.view.zoom;
+const rot = imageViewRotation(image);
+let before = { x: ux, y: uy };
+if (rot) {
+const cx = image.width / 2;
+const cy = image.height / 2;
+const dx = ux - cx;
+const dy = uy - cy;
+const cos = Math.cos(-rot);
+const sin = Math.sin(-rot);
+before = { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+}
 const factor = event.deltaY < 0 ? 1.12 : .89;
 image.view.zoom = Math.max(.01, Math.min(20, image.view.zoom * factor));
-image.view.panX = mouseX - before.x * image.view.zoom;
-image.view.panY = mouseY - before.y * image.view.zoom;
+let vx = before.x;
+let vy = before.y;
+if (rot) {
+const cx = image.width / 2;
+const cy = image.height / 2;
+const dx = before.x - cx;
+const dy = before.y - cy;
+const cos = Math.cos(rot);
+const sin = Math.sin(rot);
+vx = cx + dx * cos - dy * sin;
+vy = cy + dx * sin + dy * cos;
+}
+image.view.panX = mouseX - vx * image.view.zoom;
+image.view.panY = mouseY - vy * image.view.zoom;
 draw();
 }
 function refreshUI() {
@@ -3657,7 +3842,6 @@ updateProjectTitle();
 renderFilmstrip();
 renderStructure();
 renderProperties();
-renderCalibration();
 renderMeasurements();
 renderStainWizard();
 draw();
@@ -3774,6 +3958,7 @@ const CHART_ICON = `<svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d=
 function structureIcon(object) {
 const icons = {
 scale: `<svg viewBox="0 0 24 24"><path d="M4 17L17 4M7 19l-2-2m6-2-2-2m6-2-2-2m6-2-2-2"/></svg>`,
+plumb: `<svg viewBox="0 0 24 24"><path d="M12 3v14"/><path d="m8 13 4 5 4-5"/></svg>`,
 distance: `<svg viewBox="0 0 24 24"><path d="M4 18L20 6"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="6" r="2"/></svg>`,
 reference: `<svg viewBox="0 0 24 24"><path d="M4 18L20 6"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="6" r="2"/></svg>`,
 angle: `<svg viewBox="0 0 24 24"><path d="M4 19L11 7L20 19"/><path d="M9 15a5 5 0 0 0 5 0"/></svg>`,
@@ -3816,9 +4001,21 @@ form.append(checkField("Locked", object.locked, (checked) => object.locked = che
 form.append(colorField("Color", object.color, (value) => object.color = value));
 if (object.type !== "text") form.append(numberField("Line width", object.lineWidth, (value) => object.lineWidth = value, { min: 1, max: 12, step: 1 }));
 if (object.type === "scale") {
+const pixels = distance(object.p1, object.p2);
 form.append(numberField("Known distance", object.knownLength, (value) => { object.knownLength = Math.max(.0001, value); activeImage().calibration = object; }, { min: .0001, step: .1 }));
 form.append(selectField("Units", object.units, ["mm", "cm", "m", "in", "ft"], (value) => { object.units = value; activeImage().calibration = object; }));
-form.append(readonlyField("Pixel distance", distance(object.p1, object.p2).toFixed(2)));
+form.append(readonlyField("Pixel distance", pixels.toFixed(2)));
+form.append(readonlyField("Scale factor", `${(object.knownLength / Math.max(pixels, 1e-9)).toFixed(6)} ${object.units}/px`));
+}
+if (object.type === "plumb") {
+const image = activeImage();
+const offset = plumbOffsetDegrees(image);
+form.append(readonlyField("Offset from vertical", `${offset >= 0 ? "+" : ""}${offset.toFixed(2)}°`));
+form.append(checkField("Align image to gravity", object.alignToGravity !== false, (checked) => {
+object.alignToGravity = checked;
+if (image) image.plumb = object;
+refreshAfterPropertyChange();
+}));
 }
 if (["distance", "reference", "polyline", "polygon", "angle"].includes(object.type)) form.append(readonlyField("Result", objectValue(object)));
 if (object.type === "halfEllipse") {
@@ -3826,7 +4023,7 @@ const units = activeImage()?.calibration?.units || "px";
 const multiplier = unitScale() || 1;
 form.append(readonlyField("Length", `${(object.rx * 2 * multiplier).toFixed(2)} ${units}`));
 form.append(readonlyField("Width", `${(object.ry * 2 * multiplier).toFixed(2)} ${units}`));
-form.append(numberField("Gamma angle", ellipseGammaDegrees(object).toFixed(1), (value) => object.rotation = rotationFromGammaDegrees(value), { min: 0, max: 360, step: .1 }));
+form.append(numberField("Gamma angle", displayGammaDegrees(object).toFixed(1), (value) => object.rotation = rotationFromDisplayGammaDegrees(value), { min: 0, max: 360, step: .1 }));
 form.append(readonlyField("Alpha angle", `${ellipseAlphaDegrees(object).toFixed(1)}°`));
 form.append(sessionButton("Flip direction", () => {
 object.rotation = normalizeAngle((object.rotation || 0) + Math.PI);
@@ -3855,7 +4052,7 @@ form.append(readonlyField("Area", `${(Math.PI * radius * radius).toFixed(2)} ${u
 } else {
 form.append(readonlyField("Major axis", `${major.toFixed(2)} ${units}`));
 form.append(readonlyField("Minor axis", `${minor.toFixed(2)} ${units}`));
-form.append(numberField("Gamma angle", ellipseGammaDegrees(object).toFixed(1), (value) => object.rotation = rotationFromGammaDegrees(value), { min: 0, max: 360, step: .1 }));
+form.append(numberField("Gamma angle", displayGammaDegrees(object).toFixed(1), (value) => object.rotation = rotationFromDisplayGammaDegrees(value), { min: 0, max: 360, step: .1 }));
 form.append(readonlyField("Alpha angle", `${ellipseAlphaDegrees(object).toFixed(1)}°`));
 }
 form.append(checkField("Show points", object.showPoints !== false, (checked) => object.showPoints = checked));
@@ -3991,18 +4188,7 @@ function readonlyField(title, value) { const input = Object.assign(document.crea
 function selectField(title, value, options, handler) { const select = document.createElement("select"); options.forEach((option) => { const item = typeof option === "string" ? { value: option, label: option } : option; select.add(new Option(item.label, item.value, item.value === value, item.value === value)); }); bindInput(select, handler); return makeLabel(title, select); }
 function colorField(title, value, handler) { const input = Object.assign(document.createElement("input"), { type: "color", value }); bindInput(input, handler); return makeLabel(title, input); }
 function checkField(title, checked, handler) { const label = document.createElement("label"); label.className = "inline"; const input = Object.assign(document.createElement("input"), { type: "checkbox", checked }); input.addEventListener("change", () => { recordHistory(); handler(input.checked); refreshAfterPropertyChange(); }); label.append(document.createTextNode(title), input); return label; }
-function refreshAfterPropertyChange() { renderStructure(); renderCalibration(); renderMeasurements(); draw(); }
-function renderCalibration() {
-const image = activeImage();
-const calibration = image?.calibration;
-$("#calibrationEmpty").hidden = Boolean(calibration);
-$("#calibrationValues").hidden = !calibration;
-if (!calibration) return;
-const pixels = distance(calibration.p1, calibration.p2);
-$("#knownLengthValue").textContent = `${calibration.knownLength} ${calibration.units}`;
-$("#pixelLengthValue").textContent = `${pixels.toFixed(2)} px`;
-$("#scaleFactorValue").textContent = `${(calibration.knownLength / pixels).toFixed(6)} ${calibration.units}/px`;
-}
+function refreshAfterPropertyChange() { renderStructure(); renderMeasurements(); draw(); }
 function renderMeasurements() {
 const image = activeImage();
 const objects = image?.objects || [];
@@ -4067,6 +4253,7 @@ const index = image.objects.findIndex((object) => object.id === state.selectedOb
 if (index < 0) return;
 const [removed] = image.objects.splice(index, 1);
 if (image.calibration?.id === removed.id) image.calibration = null;
+if (image.plumb?.id === removed.id) image.plumb = null;
 if (removed.type === "stainCount") {
 image.objects = image.objects.filter((object) => object.sessionId !== removed.id);
 invalidateStainMask(removed);
@@ -4107,7 +4294,7 @@ stain ? object.stainNumber : "",
 stain ? (object.rx * 2 * scale).toFixed(3) : "",
 stain ? (object.ry * 2 * scale).toFixed(3) : "",
 stain ? ellipseAlphaDegrees(object).toFixed(2) : "",
-stain ? ellipseGammaDegrees(object).toFixed(2) : "",
+stain ? displayGammaDegrees(object, image).toFixed(2) : "",
 object.source || "",
 ]);
 }));
@@ -4157,7 +4344,7 @@ return `<tr>
       <td>${stain ? (object.rx * 2 * scale).toFixed(3) : ""}</td>
       <td>${stain ? (object.ry * 2 * scale).toFixed(3) : ""}</td>
       <td>${stain ? ellipseAlphaDegrees(object).toFixed(2) : ""}</td>
-      <td>${stain ? ellipseGammaDegrees(object).toFixed(2) : ""}</td>
+      <td>${stain ? displayGammaDegrees(object, image).toFixed(2) : ""}</td>
       <td>${escapeHtml(object.source || "")}</td>
     </tr>`;
 })).join("");
@@ -4226,21 +4413,31 @@ setTimeout(cleanup, 4000);
 async function saveProject() {
 if (!state.project.images.length) { alert("Add at least one image before saving the project."); return; }
 syncProjectMetadata();
+const suggested = state.projectFileName || `${safeName(state.project.name)}.elp`;
 const manifest = {
-...state.project,
+format: state.project.format,
+version: state.project.version,
+name: state.project.name,
+caseNumber: state.project.caseNumber,
+notes: state.project.notes,
 images: state.project.images.map((image, index) => ({
 id: image.id, name: image.name, mime: image.mime, width: image.width, height: image.height,
 path: `images/${String(index + 1).padStart(3, "0")}-${safeName(image.name)}`,
 calibrationId: image.calibration?.id || null,
+plumbId: image.plumb?.id || null,
 objects: image.objects,
 })),
 };
 const files = [{ name: "manifest.json", bytes: new TextEncoder().encode(JSON.stringify(manifest, null, 2)) }];
 state.project.images.forEach((image, index) => files.push({ name: manifest.images[index].path, bytes: image.bytes }));
 const zip = createZip(files);
-await saveBlob(new Blob([zip], { type: "application/octet-stream" }), `${safeName(state.project.name)}.elp`, [
+const savedAs = await saveBlob(new Blob([zip], { type: "application/octet-stream" }), suggested, [
 { description: "ELlipserWeb project", accept: { "application/octet-stream": [".elp"] } },
 ]);
+if (savedAs) {
+setProjectFileName(savedAs);
+updateProjectTitle();
+}
 }
 async function openProjectFile(file) {
 try {
@@ -4257,8 +4454,12 @@ const blob = new Blob([bytes], { type: saved.mime });
 const url = URL.createObjectURL(blob);
 const element = await loadImage(url);
 const objects = (saved.objects || []).map((object) => isEllipseLike(object.type) ? normalizeEllipse(object) : object);
-const image = { id: saved.id || uid("img"), name: saved.name, mime: saved.mime, bytes, width: saved.width || element.naturalWidth, height: saved.height || element.naturalHeight, element, objects, calibration: null, view: { zoom: 1, panX: 0, panY: 0 } };
+const image = { id: saved.id || uid("img"), name: saved.name, mime: saved.mime, bytes, width: saved.width || element.naturalWidth, height: saved.height || element.naturalHeight, element, objects, calibration: null, plumb: null, view: { zoom: 1, panX: 0, panY: 0 } };
 image.calibration = image.objects.find((object) => object.id === saved.calibrationId) || null;
+image.plumb = image.objects.find((object) => object.id === saved.plumbId)
+|| image.objects.find((object) => object.type === "plumb")
+|| null;
+if (image.plumb && image.plumb.alignToGravity === undefined) image.plumb.alignToGravity = true;
 project.images.push(image);
 }
 state.project = project;
@@ -4266,6 +4467,7 @@ state.projectStarted = true;
 state.activeImageId = project.images[0]?.id || null;
 state.selectedObjectId = null;
 state.draft = null;
+setProjectFileName(file.name);
 clearHistory();
 populateProjectMetadata();
 refreshUI();
@@ -4275,12 +4477,24 @@ console.error(error);
 alert("This .elp project could not be opened. It may be damaged or from an unsupported version.");
 }
 }
+function elpLabelFromName(name) {
+const trimmed = String(name || "").trim().replace(/\.elp$/i, "");
+if (!trimmed || /^untitled(\s+project)?$/i.test(trimmed)) return "Untitled.elp";
+return `${trimmed}.elp`;
+}
+function setProjectFileName(filename) {
+const raw = String(filename || "").trim();
+if (!raw) {
+state.projectFileName = null;
+return;
+}
+state.projectFileName = /\.elp$/i.test(raw) ? raw : `${raw}.elp`;
+}
 function projectFileLabel() {
+if (state.projectFileName) return state.projectFileName;
 const hasProject = state.projectStarted || state.project.images.length > 0;
 if (!hasProject) return "Untitled.elp";
-const name = (state.project.name || "").trim().replace(/\.elp$/i, "");
-if (!name || /^untitled(\s+project)?$/i.test(name)) return "Untitled.elp";
-return `${name}.elp`;
+return elpLabelFromName(state.project.name);
 }
 function updateProjectTitle() {
 const label = projectFileLabel();
@@ -4290,15 +4504,19 @@ el.textContent = label;
 el.title = label;
 }
 function syncProjectMetadata() {
-state.project.name = $("#projectName").value.trim() || "Untitled Project";
-state.project.caseNumber = $("#caseNumber").value.trim();
-state.project.notes = $("#projectNotes").value;
+state.project.name = $("#projectName")?.value.trim() || "Untitled Project";
+state.project.caseNumber = $("#caseNumber")?.value.trim() || "";
+state.project.notes = $("#projectNotes")?.value || "";
+setProjectFileName(elpLabelFromName(state.project.name));
 updateProjectTitle();
 }
 function populateProjectMetadata() {
-$("#projectName").value = state.project.name;
-$("#caseNumber").value = state.project.caseNumber;
-$("#projectNotes").value = state.project.notes;
+const nameInput = $("#projectName");
+const caseInput = $("#caseNumber");
+const notesInput = $("#projectNotes");
+if (nameInput) nameInput.value = state.project.name;
+if (caseInput) caseInput.value = state.project.caseNumber;
+if (notesInput) notesInput.value = state.project.notes;
 updateProjectTitle();
 }
 function openNewProjectDialog() {
@@ -4466,6 +4684,7 @@ state.projectStarted = true;
 state.project.name = projectName.value.trim();
 state.project.caseNumber = $("#newCaseNumber").value.trim();
 state.project.notes = $("#newProjectNotes").value;
+setProjectFileName(elpLabelFromName(state.project.name));
 state.activeImageId = null;
 state.selectedObjectId = null;
 state.draft = null;
@@ -4489,20 +4708,230 @@ const button = isLeft ? $("#toggleLeftPanel") : $("#toggleRightPanel");
 const collapsed = workspace.classList.toggle(className);
 button.textContent = isLeft ? (collapsed ? "›" : "‹") : (collapsed ? "‹" : "›");
 button.setAttribute("aria-expanded", String(!collapsed));
-button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${isLeft ? "Structure and Properties" : "Project panel"}`);
+button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${isLeft ? "left" : "right"} panels`);
 applyPanelWidths();
 requestAnimationFrame(resizeCanvas);
 }
 const PANEL_WIDTH_MIN = { left: 180, right: 200 };
 const PANEL_WIDTH_MAX = { left: 520, right: 520 };
+const PANEL_KEYS = ["structure", "properties", "project", "measurements"];
+const PANEL_LABELS = { structure: "Structure", properties: "Properties", project: "Project", measurements: "Measurements" };
 function panelWidthPrefs() {
 if (!state.prefs.layout) state.prefs.layout = { ...defaultPrefs.layout };
 return state.prefs.layout;
+}
+function panelPrefs() {
+if (!state.prefs.panels) state.prefs.panels = clonePrefs().panels;
+return state.prefs.panels;
 }
 function clampPanelWidth(side, width) {
 const min = PANEL_WIDTH_MIN[side];
 const max = PANEL_WIDTH_MAX[side];
 return Math.max(min, Math.min(max, Math.round(width)));
+}
+function panelEl(key) {
+return document.querySelector(`[data-panel="${key}"]`);
+}
+function dockedVisibleOnSide(side) {
+const panels = panelPrefs();
+return PANEL_KEYS
+.filter((key) => {
+const cfg = panels[key];
+return cfg.visible && cfg.mode === "docked" && cfg.side === side;
+})
+.sort((a, b) => {
+const delta = (Number(panels[a].order) || 0) - (Number(panels[b].order) || 0);
+if (delta) return delta;
+return PANEL_KEYS.indexOf(a) - PANEL_KEYS.indexOf(b);
+});
+}
+function normalizeHeightFracs(side) {
+const panels = panelPrefs();
+const keys = dockedVisibleOnSide(side);
+if (!keys.length) return;
+let sum = keys.reduce((total, key) => total + Math.max(0.05, Number(panels[key].heightFrac) || 0.5), 0);
+if (sum <= 0) sum = keys.length;
+keys.forEach((key) => {
+panels[key].heightFrac = Math.max(0.05, Number(panels[key].heightFrac) || 0.5) / sum;
+});
+}
+function setDockCollapsed(side, collapsed) {
+const workspace = $(".workspace");
+const className = side === "left" ? "left-collapsed" : "right-collapsed";
+const button = side === "left" ? $("#toggleLeftPanel") : $("#toggleRightPanel");
+workspace.classList.toggle(className, collapsed);
+if (button) {
+button.textContent = side === "left" ? (collapsed ? "›" : "‹") : (collapsed ? "‹" : "›");
+button.setAttribute("aria-expanded", String(!collapsed));
+button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${side} panels`);
+}
+}
+function updateViewMenuChecks() {
+const panels = panelPrefs();
+$$("[data-panel-toggle]").forEach((button) => {
+const key = button.dataset.panelToggle;
+const visible = Boolean(panels[key]?.visible);
+button.setAttribute("aria-checked", String(visible));
+});
+}
+function ensureFloatChrome(panel, key) {
+const heading = panel.querySelector(".panel-heading");
+if (!heading) return;
+let close = heading.querySelector(".panel-float-close");
+if (!close) {
+close = document.createElement("button");
+close.type = "button";
+close.className = "panel-float-close";
+close.title = "Hide panel";
+close.setAttribute("aria-label", `Hide ${PANEL_LABELS[key] || key}`);
+close.textContent = "×";
+close.addEventListener("click", (event) => {
+event.stopPropagation();
+setPanelVisible(key, false);
+});
+heading.appendChild(close);
+}
+let resize = panel.querySelector(".panel-float-resize");
+if (!resize) {
+resize = document.createElement("div");
+resize.className = "panel-float-resize";
+resize.title = "Resize";
+panel.appendChild(resize);
+}
+}
+function clearFloatChrome(panel) {
+panel.querySelector(".panel-float-close")?.remove();
+panel.querySelector(".panel-float-resize")?.remove();
+}
+function applyFloatGeometry(panel, float) {
+const left = Math.max(8, Number(float.left) || 80);
+const top = Math.max(52, Number(float.top) || 80);
+const width = Math.max(220, Number(float.width) || 280);
+const height = Math.max(160, Number(float.height) || 280);
+float.left = left;
+float.top = top;
+float.width = width;
+float.height = height;
+panel.style.left = `${left}px`;
+panel.style.top = `${top}px`;
+panel.style.width = `${width}px`;
+panel.style.height = `${height}px`;
+panel.style.flex = "";
+}
+function applyPanelLayout() {
+const panels = panelPrefs();
+const leftStack = $("#dockLeftStack");
+const rightStack = $("#dockRightStack");
+const floatHost = $("#panelFloatHost");
+if (!leftStack || !rightStack || !floatHost) return;
+leftStack.querySelectorAll(".panel-split-y").forEach((node) => node.remove());
+rightStack.querySelectorAll(".panel-split-y").forEach((node) => node.remove());
+PANEL_KEYS.forEach((key) => {
+const cfg = panels[key];
+const panel = panelEl(key);
+if (!panel || !cfg) return;
+panel.hidden = !cfg.visible;
+panel.classList.toggle("is-floating", cfg.visible && cfg.mode === "float");
+panel.classList.remove("is-dragging");
+panel.style.flex = "";
+panel.style.left = "";
+panel.style.top = "";
+panel.style.width = "";
+panel.style.height = "";
+if (!cfg.visible) {
+clearFloatChrome(panel);
+if (cfg.mode === "float") floatHost.appendChild(panel);
+else (cfg.side === "right" ? rightStack : leftStack).appendChild(panel);
+return;
+}
+if (cfg.mode === "float") {
+ensureFloatChrome(panel, key);
+floatHost.appendChild(panel);
+applyFloatGeometry(panel, cfg.float);
+} else {
+clearFloatChrome(panel);
+(cfg.side === "right" ? rightStack : leftStack).appendChild(panel);
+}
+});
+for (const side of ["left", "right"]) {
+normalizeHeightFracs(side);
+const stack = side === "left" ? leftStack : rightStack;
+const keys = dockedVisibleOnSide(side);
+keys.forEach((key, index) => {
+const panel = panelEl(key);
+const cfg = panels[key];
+if (!panel || !cfg) return;
+panel.style.flex = `${cfg.heightFrac} 1 0`;
+panel.style.minHeight = "96px";
+stack.appendChild(panel);
+if (index < keys.length - 1) {
+const split = document.createElement("div");
+split.className = "panel-split-y";
+split.dataset.side = side;
+split.dataset.upper = key;
+split.dataset.lower = keys[index + 1];
+split.setAttribute("role", "separator");
+split.setAttribute("aria-orientation", "horizontal");
+split.setAttribute("aria-label", "Resize panels");
+stack.appendChild(split);
+}
+});
+setDockCollapsed(side, keys.length === 0);
+}
+updateViewMenuChecks();
+applyPanelWidths();
+requestAnimationFrame(resizeCanvas);
+}
+function setPanelVisible(key, visible) {
+const panels = panelPrefs();
+if (!panels[key]) return;
+panels[key].visible = Boolean(visible);
+if (visible && panels[key].mode === "docked") {
+const peers = PANEL_KEYS.filter((other) => (
+other !== key
+&& panels[other].visible
+&& panels[other].mode === "docked"
+&& panels[other].side === panels[key].side
+));
+if (peers.some((other) => Number(panels[other].order) === Number(panels[key].order))) {
+panels[key].order = peers.reduce((max, other) => Math.max(max, Number(panels[other].order) || 0), -1) + 1;
+}
+}
+savePrefs();
+applyPanelLayout();
+}
+function togglePanelVisibility(key) {
+const panels = panelPrefs();
+if (!panels[key]) return;
+setPanelVisible(key, !panels[key].visible);
+}
+function dockPanel(key, side) {
+const panels = panelPrefs();
+const cfg = panels[key];
+if (!cfg) return;
+cfg.mode = "docked";
+cfg.side = side === "right" ? "right" : "left";
+cfg.visible = true;
+const peers = PANEL_KEYS.filter((other) => other !== key && panels[other].visible && panels[other].mode === "docked" && panels[other].side === cfg.side);
+const maxOrder = peers.reduce((max, other) => Math.max(max, Number(panels[other].order) || 0), -1);
+cfg.order = maxOrder + 1;
+savePrefs();
+applyPanelLayout();
+}
+function floatPanelAt(key, left, top, width, height) {
+const panels = panelPrefs();
+const cfg = panels[key];
+if (!cfg) return;
+cfg.mode = "float";
+cfg.visible = true;
+cfg.float = {
+left: Math.round(left),
+top: Math.round(top),
+width: Math.round(width || cfg.float.width || 280),
+height: Math.round(height || cfg.float.height || 280),
+};
+savePrefs();
+applyPanelLayout();
 }
 function applyPanelWidths() {
 const workspace = $(".workspace");
@@ -4583,6 +5012,223 @@ resizeCanvas();
 });
 });
 }
+function pointInRect(x, y, rect) {
+return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+function showDockDrops(show) {
+["#dockDropLeft", "#dockDropRight"].forEach((selector) => {
+const node = $(selector);
+if (!node) return;
+node.hidden = !show;
+node.setAttribute("aria-hidden", String(!show));
+});
+}
+function hitDockSide(clientX, clientY) {
+const left = $("#dockDropLeft");
+const right = $("#dockDropRight");
+if (left && !left.hidden && pointInRect(clientX, clientY, left.getBoundingClientRect())) return "left";
+if (right && !right.hidden && pointInRect(clientX, clientY, right.getBoundingClientRect())) return "right";
+const leftDock = $("#dockLeft");
+const rightDock = $("#dockRight");
+if (leftDock && !leftDock.closest(".workspace")?.classList.contains("left-collapsed") && pointInRect(clientX, clientY, leftDock.getBoundingClientRect())) return "left";
+if (rightDock && !rightDock.closest(".workspace")?.classList.contains("right-collapsed") && pointInRect(clientX, clientY, rightDock.getBoundingClientRect())) return "right";
+return null;
+}
+function bindPanelInteractions() {
+const workspace = $(".workspace");
+let drag = null;
+let split = null;
+let resize = null;
+const endDrag = (event) => {
+if (!drag) return;
+const { key, panel, moved } = drag;
+panel.classList.remove("is-dragging");
+showDockDrops(false);
+window.removeEventListener("pointermove", onDragMove);
+window.removeEventListener("pointerup", endDrag);
+if (!moved) {
+drag = null;
+return;
+}
+const side = hitDockSide(event.clientX, event.clientY);
+if (side) dockPanel(key, side);
+else {
+const rect = panel.getBoundingClientRect();
+floatPanelAt(key, rect.left, rect.top, rect.width, rect.height);
+}
+drag = null;
+};
+const onDragMove = (event) => {
+if (!drag) return;
+const dx = event.clientX - drag.startX;
+const dy = event.clientY - drag.startY;
+if (!drag.moved && dx * dx + dy * dy < 36) return;
+if (!drag.moved) {
+drag.moved = true;
+const cfg = panelPrefs()[drag.key];
+const rect = drag.panel.getBoundingClientRect();
+if (cfg.mode !== "float") {
+const prevSide = cfg.side;
+cfg.mode = "float";
+cfg.float = { left: rect.left, top: rect.top, width: rect.width, height: Math.max(160, rect.height) };
+ensureFloatChrome(drag.panel, drag.key);
+$("#panelFloatHost").appendChild(drag.panel);
+drag.panel.classList.add("is-floating");
+applyFloatGeometry(drag.panel, cfg.float);
+drag.offsetX = event.clientX - rect.left;
+drag.offsetY = event.clientY - rect.top;
+const stack = prevSide === "right" ? $("#dockRightStack") : $("#dockLeftStack");
+stack?.querySelectorAll(".panel-split-y").forEach((node) => node.remove());
+const remain = dockedVisibleOnSide(prevSide);
+if (!remain.length) setDockCollapsed(prevSide, true);
+else {
+normalizeHeightFracs(prevSide);
+remain.forEach((key) => {
+const panel = panelEl(key);
+if (panel) panel.style.flex = `${panelPrefs()[key].heightFrac} 1 0`;
+});
+}
+applyPanelWidths();
+resizeCanvas();
+}
+drag.panel.classList.add("is-dragging");
+showDockDrops(true);
+}
+const cfg = panelPrefs()[drag.key];
+cfg.float.left = Math.round(event.clientX - drag.offsetX);
+cfg.float.top = Math.round(event.clientY - drag.offsetY);
+applyFloatGeometry(drag.panel, cfg.float);
+};
+const onSplitMove = (event) => {
+if (!split) return;
+const panels = panelPrefs();
+const upperPanel = panelEl(split.upper);
+const lowerPanel = panelEl(split.lower);
+const upper = panels[split.upper];
+const lower = panels[split.lower];
+if (!upperPanel || !lowerPanel || !upper || !lower) return;
+const pairTop = upperPanel.getBoundingClientRect().top;
+const pairBottom = lowerPanel.getBoundingClientRect().bottom;
+const pairHeight = Math.max(1, pairBottom - pairTop - 6);
+const pairFrac = Math.max(0.2, (Number(upper.heightFrac) || 0.5) + (Number(lower.heightFrac) || 0.5));
+let upperFrac = ((event.clientY - pairTop) / pairHeight) * pairFrac;
+upperFrac = Math.max(0.12 * pairFrac, Math.min(pairFrac - 0.12 * pairFrac, upperFrac));
+upper.heightFrac = upperFrac;
+lower.heightFrac = pairFrac - upperFrac;
+upperPanel.style.flex = `${upper.heightFrac} 1 0`;
+lowerPanel.style.flex = `${lower.heightFrac} 1 0`;
+};
+const endSplit = () => {
+if (!split) return;
+normalizeHeightFracs(split.side);
+split = null;
+workspace?.classList.remove("resizing-y");
+window.removeEventListener("pointermove", onSplitMove);
+window.removeEventListener("pointerup", endSplit);
+savePrefs();
+applyPanelLayout();
+};
+const onResizeMove = (event) => {
+if (!resize) return;
+const cfg = panelPrefs()[resize.key];
+cfg.float.width = Math.max(220, resize.startW + (event.clientX - resize.startX));
+cfg.float.height = Math.max(160, resize.startH + (event.clientY - resize.startY));
+applyFloatGeometry(resize.panel, cfg.float);
+};
+const endResize = () => {
+if (!resize) return;
+resize = null;
+window.removeEventListener("pointermove", onResizeMove);
+window.removeEventListener("pointerup", endResize);
+savePrefs();
+};
+document.addEventListener("pointerdown", (event) => {
+if (event.button !== 0) return;
+const resizeHandle = event.target.closest(".panel-float-resize");
+if (resizeHandle) {
+const panel = resizeHandle.closest("[data-panel]");
+const key = panel?.dataset.panel;
+if (!key || !panelPrefs()[key]) return;
+event.preventDefault();
+const cfg = panelPrefs()[key];
+resize = {
+key,
+panel,
+startX: event.clientX,
+startY: event.clientY,
+startW: cfg.float.width,
+startH: cfg.float.height,
+};
+window.addEventListener("pointermove", onResizeMove);
+window.addEventListener("pointerup", endResize);
+return;
+}
+const splitHandle = event.target.closest(".panel-split-y");
+if (splitHandle) {
+event.preventDefault();
+const side = splitHandle.dataset.side === "right" ? "right" : "left";
+split = {
+side,
+upper: splitHandle.dataset.upper,
+lower: splitHandle.dataset.lower,
+};
+workspace?.classList.add("resizing-y");
+window.addEventListener("pointermove", onSplitMove);
+window.addEventListener("pointerup", endSplit);
+return;
+}
+if (event.target.closest(".panel-float-close")) return;
+const handle = event.target.closest(".panel-drag-handle");
+if (!handle) return;
+const panel = handle.closest("[data-panel]");
+const key = panel?.dataset.panel;
+if (!key || !panelPrefs()[key]?.visible) return;
+event.preventDefault();
+const rect = panel.getBoundingClientRect();
+drag = {
+key,
+panel,
+startX: event.clientX,
+startY: event.clientY,
+offsetX: event.clientX - rect.left,
+offsetY: event.clientY - rect.top,
+moved: false,
+};
+window.addEventListener("pointermove", onDragMove);
+window.addEventListener("pointerup", endDrag);
+});
+}
+function closeViewMenu() {
+const menu = $(".view-menu");
+if (!menu) return;
+const keepClosed = menu.matches(":hover") || menu.contains(document.activeElement);
+menu.classList.remove("open");
+if (keepClosed) menu.classList.add("closed");
+else menu.classList.remove("closed");
+$("#viewMenuBtn")?.blur();
+$("#viewMenuBtn")?.setAttribute("aria-expanded", "false");
+}
+function bindViewMenu() {
+const menu = $(".view-menu");
+if (!menu) return;
+menu.addEventListener("pointerleave", () => menu.classList.remove("closed"));
+$("#viewMenuBtn")?.addEventListener("click", (event) => {
+event.stopPropagation();
+closeFileMenu();
+const wasClosed = menu.classList.contains("closed");
+menu.classList.remove("closed");
+const open = wasClosed || !menu.classList.contains("open");
+menu.classList.toggle("open", open);
+$("#viewMenuBtn")?.setAttribute("aria-expanded", String(open));
+});
+$("#viewMenu")?.addEventListener("click", (event) => {
+const button = event.target.closest("[data-panel-toggle]");
+if (!button) return;
+event.preventDefault();
+togglePanelVisibility(button.dataset.panelToggle);
+closeViewMenu();
+});
+}
 function safeName(value) { return String(value || "project").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "project"; }
 function stripExtension(value) { return value.replace(/\.[^.]+$/, ""); }
 async function saveBlob(blob, filename, types) {
@@ -4592,12 +5238,13 @@ const handle = await window.showSaveFilePicker({ suggestedName: filename, types 
 const writable = await handle.createWritable();
 await writable.write(blob);
 await writable.close();
-return;
+return handle.name || filename;
 } catch (error) {
-if (error.name === "AbortError") return;
+if (error.name === "AbortError") return null;
 }
 }
 downloadBlob(blob, filename);
+return filename;
 }
 function downloadBlob(blob, filename) { const url = URL.createObjectURL(blob); const a = Object.assign(document.createElement("a"), { href: url, download: filename }); a.click(); setTimeout(() => URL.revokeObjectURL(url), 1500); }
 const crcTable = (() => {
@@ -4685,6 +5332,7 @@ $("#fileMenuBtn")?.setAttribute("aria-expanded", "false");
 document.addEventListener("click", (event) => {
 if (!event.target.closest(".tool-flyout, .tool-variant")) closeFlyouts();
 if (!event.target.closest(".file-menu")) closeFileMenu();
+if (!event.target.closest(".view-menu")) closeViewMenu();
 });
 window.addEventListener("resize", closeFlyouts);
 $("#newProjectPrimary").addEventListener("click", openNewProjectDialog);
@@ -4735,6 +5383,7 @@ $("#newProjectBtn").addEventListener("click", () => { closeFileMenu(); openNewPr
 $(".file-menu").addEventListener("pointerleave", () => $(".file-menu").classList.remove("closed"));
 $("#fileMenuBtn").addEventListener("click", (event) => {
 event.stopPropagation();
+closeViewMenu();
 const menu = $(".file-menu");
 const wasClosed = menu.classList.contains("closed");
 menu.classList.remove("closed");
@@ -4786,7 +5435,7 @@ redo();
 return;
 }
 if (event.ctrlKey || event.metaKey) return;
-const shortcuts = { v: "select", s: "scale", p: "point", d: "distance", a: "angle", c: "circle", e: "ellipse", h: "halfEllipse", l: "polyline", g: "polygon", t: "text", n: "stainCount" };
+const shortcuts = { v: "select", s: "scale", b: "plumb", p: "point", d: "distance", a: "angle", c: "circle", e: "ellipse", h: "halfEllipse", l: "polyline", g: "polygon", t: "text", n: "stainCount" };
 if (shortcuts[key]) setTool(shortcuts[key]);
 if (key === "f") {
 event.preventDefault();
@@ -4818,13 +5467,16 @@ draw();
 return;
 }
 state.draft = null;
+endPlumbViewFreeze();
 setTool("select");
 }
 });
 populateProjectMetadata();
 setPointStyle(stylePrefs("point").pointStyle);
 setMeasureVariant("distance");
-applyPanelWidths();
+bindViewMenu();
+bindPanelInteractions();
+applyPanelLayout();
 bindPanelResizers();
 refreshUI();
 function registerWebMcpTools() {

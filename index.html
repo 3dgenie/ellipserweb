@@ -9,7 +9,7 @@
 <meta name="description" content="ELlipserWeb — local browser-based photographic measurement and trajectory documentation.">
 <title>ELlipserWeb</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b2238'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='12' fill='none' stroke='%23f09a35' stroke-width='4' transform='rotate(-24 32 32)'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%23f09a35'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=37">
+<link rel="stylesheet" href="styles.css?v=45">
 </head>
 <body>
 <div class="app-shell">
@@ -37,6 +37,15 @@
 </div>
 </div>
 </nav>
+<nav class="view-menu" aria-label="View">
+<button type="button" id="viewMenuBtn" class="button ghost file-menu-btn" aria-haspopup="true" aria-expanded="false" aria-controls="viewMenu">View</button>
+<div id="viewMenu" class="file-dropdown" role="menu">
+<button type="button" role="menuitemcheckbox" data-panel-toggle="structure" aria-checked="true">Structure</button>
+<button type="button" role="menuitemcheckbox" data-panel-toggle="properties" aria-checked="true">Properties</button>
+<button type="button" role="menuitemcheckbox" data-panel-toggle="project" aria-checked="true">Project</button>
+<button type="button" role="menuitemcheckbox" data-panel-toggle="measurements" aria-checked="true">Measurements</button>
+</div>
+</nav>
 <span id="projectTitle" class="project-title" title="Untitled.elp">Untitled.elp</span>
 <div class="topbar-brand" aria-label="ELlipserWeb V1.0 (Beta)">
 <span class="brand-mark" aria-hidden="true"></span>
@@ -53,6 +62,7 @@
 <nav class="tool-rail" aria-label="Measurement tools">
 <button class="tool active" data-tool="select" title="Select (Esc)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5 18 14.2l-5.1.4 2.5 6.4-2.4.9-2.5-6.4L6 19.8Z" style="fill: currentColor; stroke: none"></path></svg>Select</button>
 <button class="tool" data-tool="scale" title="Scale (S)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17L17 4M7 19l-2-2m6-2-2-2m6-2-2-2m6-2-2-2"></path></svg>Scale</button>
+<button class="tool" data-tool="plumb" title="Plumb (B)"><svg class="tool-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v14"></path><path d="m8 13 4 5 4-5"></path></svg>Plumb</button>
 <div class="tool-group">
 <button class="tool" id="measureTool" data-tool="distance" title="Distance (D)"><svg class="tool-svg tool-icon" viewBox="0 0 32 24" aria-hidden="true"><path d="M7 16.5L17 7.5"></path><circle cx="7" cy="16.5" r="1.7" style="fill: currentColor; stroke: none"></circle><circle cx="17" cy="7.5" r="1.7" style="fill: currentColor; stroke: none"></circle></svg><span class="tool-name">Measure</span></button>
 <button type="button" class="tool-variant" aria-controls="measureFlyout" aria-label="Measure tools" aria-haspopup="menu" aria-expanded="false"></button>
@@ -66,21 +76,27 @@
 <button class="tool" data-tool="polygon" title="Polygon (G)"><span>⬠</span>Polygon</button>
 <button class="tool" data-tool="text" title="Text (T)"><span>T</span>Text</button>
 </nav>
-<aside class="object-sidebar">
-<button id="toggleLeftPanel" class="panel-collapse panel-collapse-left" aria-label="Collapse Structure and Properties" aria-expanded="true">‹</button>
-<div class="panel-resize panel-resize-left" data-side="left" role="separator" aria-orientation="vertical" aria-label="Resize Structure panel" tabindex="0"></div>
-<section class="panel structure-panel">
-<div class="panel-heading">
+<aside class="object-sidebar" id="dockLeft" data-dock="left">
+<button id="toggleLeftPanel" class="panel-collapse panel-collapse-left" aria-label="Collapse left panels" aria-expanded="true">‹</button>
+<div class="panel-resize panel-resize-left" data-side="left" role="separator" aria-orientation="vertical" aria-label="Resize left panels" tabindex="0"></div>
+<div class="dock-stack" id="dockLeftStack">
+<section id="panel-structure" class="panel structure-panel" data-panel="structure">
+<div class="panel-heading panel-drag-handle">
 <h2>Structure</h2>
 </div>
+<div class="panel-body-scroll">
 <div id="structureEmpty" class="empty-small">Import an image to begin.</div>
 <div id="structureList" class="structure-list" role="listbox" aria-label="Objects"></div>
+</div>
 </section>
-<section class="panel properties-panel">
-<div class="panel-heading"><h2>Properties</h2></div>
+<section id="panel-properties" class="panel properties-panel" data-panel="properties">
+<div class="panel-heading panel-drag-handle"><h2>Properties</h2></div>
+<div class="panel-body-scroll">
 <div id="propertiesEmpty" class="empty-small">Select an object to view its properties.</div>
 <form id="propertiesForm" class="properties-form" hidden></form>
+</div>
 </section>
+</div>
 </aside>
 <section class="center-stage">
 <div id="canvasWrap" class="canvas-wrap">
@@ -97,31 +113,31 @@
 </div>
 <button id="toggleFilmstrip" class="panel-collapse panel-collapse-bottom" aria-label="Collapse thumbnails" aria-expanded="true"><span>‹</span></button>
 </section>
-<aside class="details-sidebar">
-<button id="toggleRightPanel" class="panel-collapse panel-collapse-right" aria-label="Collapse Project panel" aria-expanded="true">›</button>
-<div class="panel-resize panel-resize-right" data-side="right" role="separator" aria-orientation="vertical" aria-label="Resize Project panel" tabindex="0"></div>
-<section class="panel project-panel">
-<div class="panel-heading"><h2>Project</h2></div>
+<aside class="details-sidebar" id="dockRight" data-dock="right">
+<button id="toggleRightPanel" class="panel-collapse panel-collapse-right" aria-label="Collapse right panels" aria-expanded="true">›</button>
+<div class="panel-resize panel-resize-right" data-side="right" role="separator" aria-orientation="vertical" aria-label="Resize right panels" tabindex="0"></div>
+<div class="dock-stack" id="dockRightStack">
+<section id="panel-project" class="panel project-panel" data-panel="project">
+<div class="panel-heading panel-drag-handle"><h2>Project</h2></div>
+<div class="panel-body-scroll">
 <label>Project name<input id="projectName" value="Untitled Project"></label>
 <label>Case / Reference<input id="caseNumber" placeholder="Optional"></label>
 <label>Notes<textarea id="projectNotes" rows="2" placeholder="Optional"></textarea></label>
-</section>
-<section class="panel calibration-panel">
-<div class="panel-heading"><h2>Calibration</h2></div>
-<div id="calibrationEmpty" class="empty-small">Create a scale measurement on the active image.</div>
-<div id="calibrationValues" hidden>
-<div class="data-row"><span>Known length</span><strong id="knownLengthValue">—</strong></div>
-<div class="data-row"><span>Pixel length</span><strong id="pixelLengthValue">—</strong></div>
-<div class="data-row"><span>Scale factor</span><strong id="scaleFactorValue">—</strong></div>
 </div>
 </section>
-<section class="panel measurements-panel">
-<div class="panel-heading"><h2>Measurements</h2><span id="measurementCount" class="count">0</span></div>
+<section id="panel-measurements" class="panel measurements-panel" data-panel="measurements">
+<div class="panel-heading panel-drag-handle"><h2>Measurements</h2><span id="measurementCount" class="count">0</span></div>
+<div class="panel-body-scroll">
 <div id="measurementEmpty" class="empty-small">No measurements on this image.</div>
 <div id="measurementList" class="measurement-list"></div>
+</div>
 </section>
+</div>
 </aside>
 </main>
+<div id="panelFloatHost" class="panel-float-host"></div>
+<div id="dockDropLeft" class="dock-drop dock-drop-left" hidden aria-hidden="true"></div>
+<div id="dockDropRight" class="dock-drop dock-drop-right" hidden aria-hidden="true"></div>
 <footer class="statusbar">
 <div><strong>LMB</strong> Select object / draw <span class="divider">|</span> <strong>Wheel</strong> Zoom <span class="divider">|</span> <strong>RMB</strong> Pan / finish polyline, polygon, or stain region <span class="divider">|</span> <strong>Delete</strong> Remove selected <span class="divider">|</span> <strong>F</strong> Flip ellipse</div>
 <div class="brand-status">
@@ -176,7 +192,8 @@
 <ol>
 <li>File → New to name the case, or File → Open to load a saved <code>.elp</code> project.</li>
 <li>File → Import → Images to add photographs.</li>
-<li>Draw a Scale on a known length so later values are in real units.</li>
+<li>Draw a Scale on a known length so later values are in real units (otherwise lengths stay in pixels). Draw at most one Scale and one Plumb per image.</li>
+<li>Optional: draw a Plumb vector pointing the way gravity acts if the camera was rolled. With Align image to gravity on, the photo rotates to vertical; gamma is always corrected by the plumb offset.</li>
 <li>Use the left tools to measure. Ellipse → Assisted finds stain centers and fits half-ellipses.</li>
 <li>Open the chart icon on a Stains session in Structure for distributions and the stain table.</li>
 <li>File → Save writes the project. File → Export makes a CSV report, Measurements CSV, a printable PDF report, or a marked PNG of the current photo.</li>
@@ -185,9 +202,10 @@
 <section>
 <h3>Tools and shortcuts</h3>
 <ul>
-<li><strong>Scale, Measure, Circle, Ellipse, Polyline, Polygon, Text</strong> — click a tool, then draw on the photo.</li>
+<li><strong>Scale, Plumb, Measure, Circle, Ellipse, Polyline, Polygon, Text</strong> — click a tool, then draw on the photo. Plumb is <strong>B</strong>.</li>
 <li><strong>Wheel</strong> zooms, <strong>right-drag</strong> pans, <strong>Delete</strong> removes the selection, <strong>F</strong> flips an ellipse, <strong>Ctrl+Z</strong> / <strong>Ctrl+Shift+Z</strong> undo and redo.</li>
 <li>Per-stain arrows at centers set travel direction; Fit stays near each arrow within the Settings angle tolerance.</li>
+<li><strong>View</strong> shows or hides Structure, Properties, Project, and Measurements. Drag a panel heading to float it over the canvas or dock it left/right.</li>
 </ul>
 </section>
 <section>
@@ -202,7 +220,8 @@
 <section>
 <h3>Capabilities</h3>
 <ul>
-<li>Calibrated length, width, alpha, and gamma for each stain.</li>
+<li>Calibrated length, width, alpha, and gravity-corrected gamma for each stain.</li>
+<li>Optional plumb line to correct camera roll and align the image to gravity.</li>
 <li>Assisted detection with dark and light stain samples, detect/exclude regions, and manual marking.</li>
 <li>Stain charts: impact-angle and width histograms, direction rose, width/length vs alpha, and a location map.</li>
 <li>Project metadata, structure tree, and per-object styles.</li>
@@ -280,14 +299,20 @@
 <button type="button" id="closeStainChartViewer" class="dialog-close" aria-label="Close graph">×</button>
 </div>
 </div>
-<div id="stainChartViewerStage" class="stain-chart-viewer-stage">
+<div class="stain-chart-viewer-tabs" role="tablist" aria-label="Graph or table">
+<button type="button" id="stainChartViewerTabGraph" class="stain-chart-viewer-tab active" role="tab" aria-selected="true" data-viewer-tab="graph">Graph</button>
+<button type="button" id="stainChartViewerTabTable" class="stain-chart-viewer-tab" role="tab" aria-selected="false" data-viewer-tab="table">Table</button>
+</div>
+<div class="stain-chart-viewer-body">
 <button type="button" id="stainChartViewerPrev" class="stain-chart-nav stain-chart-nav-prev" aria-label="Previous graph">‹</button>
-<div id="stainChartViewerContent" class="stain-chart-viewer-content"></div>
 <button type="button" id="stainChartViewerNext" class="stain-chart-nav stain-chart-nav-next" aria-label="Next graph">›</button>
+<div id="stainChartViewerStage" class="stain-chart-viewer-stage" role="tabpanel" data-viewer-panel="graph">
+<div id="stainChartViewerContent" class="stain-chart-viewer-content"></div>
 <button type="button" id="stainChartViewerFit" class="stain-chart-fit" title="Fit graph to view" aria-label="Fit graph to view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
 </div>
-<div id="stainChartViewerStats" class="stain-chart-viewer-stats" hidden></div>
-<p class="stain-chart-viewer-hint">‹ › or arrow keys to cycle · wheel zoom · drag to pan · Fit recenters · Esc to close</p>
+<div id="stainChartViewerStats" class="stain-chart-viewer-stats" role="tabpanel" data-viewer-panel="table" hidden></div>
+</div>
+<p id="stainChartViewerHint" class="stain-chart-viewer-hint">‹ › or arrow keys to cycle · wheel zoom · drag to pan · Fit recenters · Esc to close</p>
 </div>
 </dialog>
 <dialog id="newProjectDialog" class="project-dialog">
@@ -350,6 +375,6 @@
 </div>
 <input id="imageInput" type="file" accept="image/*" multiple hidden>
 <input id="projectInput" type="file" accept=".elp,application/octet-stream" hidden>
-<script src="app.js?v=37"></script>
+<script src="app.js?v=45"></script>
 </body>
 </html>
