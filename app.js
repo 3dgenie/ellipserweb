@@ -1076,7 +1076,11 @@ const image = activeImage();
 const count = image.objects.filter((object) => object.type === type).length + 1;
 const label = ({ scale: "Scale", plumb: "Plumb", point: "Point", distance: "Distance", angle: "Angle", circle: "Circle", ellipse: "Ellipse", halfEllipse: "Half Ellipse", polyline: "Polyline", polygon: "Polygon", text: "Text", stainCount: "Stains" })[type];
 const style = stylePrefs(type);
-return { id: uid(type), type, name: `${label} ${count}`, visible: true, locked: false, color: style.color, lineWidth: style.lineWidth, ...data };
+const object = { id: uid(type), type, name: `${label} ${count}`, visible: true, locked: false, color: style.color, lineWidth: style.lineWidth, ...data };
+if (["circle", "ellipse", "halfEllipse"].includes(type) && object.showPoints === undefined) {
+object.showPoints = style.showPoints !== false;
+}
+return object;
 }
 function completeObject(object, keepTool = false) {
 recordHistory();
@@ -1810,12 +1814,14 @@ function fillStainChart(session, image = activeImage()) {
 const stains = sessionStains(session, image);
 const empty = $("#stainChartEmpty");
 const summary = $("#stainChartSummary");
+const tableSection = $("#stainChartTableSection");
 const tableWrap = $("#stainChartTableWrap");
 const body = $("#stainChartBody");
 const graphs = $("#stainChartGraphs");
 empty.hidden = stains.length > 0;
 summary.hidden = stains.length === 0;
-tableWrap.hidden = stains.length === 0;
+if (tableSection) tableSection.hidden = stains.length === 0;
+if (tableWrap) tableWrap.hidden = stains.length === 0;
 graphs.hidden = stains.length === 0;
 summary.innerHTML = "";
 body.innerHTML = "";
@@ -3239,7 +3245,7 @@ function addStain(session, geometry, source, extra = {}) {
 const image = activeImage();
 const object = normalizeEllipse(makeObject("halfEllipse", {
 ...geometry,
-showPoints: false,
+showPoints: stylePrefs("halfEllipse").showPoints !== false,
 sessionId: session.id,
 source,
 fromSeed: Boolean(extra.fromSeed),

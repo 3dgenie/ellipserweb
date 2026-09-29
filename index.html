@@ -9,7 +9,7 @@
 <meta name="description" content="ELlipserWeb — local browser-based photographic measurement and trajectory documentation.">
 <title>ELlipserWeb</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b2238'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='12' fill='none' stroke='%23f09a35' stroke-width='4' transform='rotate(-24 32 32)'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%23f09a35'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=45">
+<link rel="stylesheet" href="styles.css?v=47">
 </head>
 <body>
 <div class="app-shell">
@@ -269,7 +269,9 @@
 <p id="stainChartEmpty" class="settings-note">No stains yet</p>
 <div id="stainChartGraphs" class="stain-chart-graphs" hidden></div>
 <div id="stainChartSummary" class="stain-chart-summary" hidden></div>
-<div id="stainChartTableWrap" class="stain-chart-table-wrap" hidden>
+<div id="stainChartTableSection" class="stain-chart-table-section" hidden>
+<h3 class="stain-chart-table-heading">Stain data</h3>
+<div id="stainChartTableWrap" class="stain-chart-table-wrap">
 <table class="stain-chart-table">
 <thead>
 <tr>
@@ -283,6 +285,7 @@
 </thead>
 <tbody id="stainChartBody"></tbody>
 </table>
+</div>
 </div>
 <div class="dialog-actions">
 <button type="submit" class="button primary">Done</button>
@@ -375,6 +378,6 @@
 </div>
 <input id="imageInput" type="file" accept="image/*" multiple hidden>
 <input id="projectInput" type="file" accept=".elp,application/octet-stream" hidden>
-<script src="app.js?v=45"></script>
+<script src="app.js?v=47"></script>
 </body>
 </html>
